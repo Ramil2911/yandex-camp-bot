@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any
 from langchain_openai import ChatOpenAI
 
 from app.utils.config import OPENAI_API_KEY, FOLDER_ID, MODEL_CONFIG
-from app.utils.log import logger, log_system_event
+from app.utils.log import logger, log_system_event, log_model_info, log_bot_startup
 
 
 class LLMBase(ABC):
@@ -24,8 +24,7 @@ class LLMBase(ABC):
             component_name: Имя компонента для логирования
         """
         self.component_name = component_name
-        log_system_event(f"{component_name}_initialization_started",
-                        f"Starting {component_name} initialization")
+        log_bot_startup(f"{component_name}_init", f"Starting {component_name} initialization")
 
         try:
             # Используем переданные параметры или значения по умолчанию из конфига
@@ -38,14 +37,23 @@ class LLMBase(ABC):
 
             # Создаем базовый LLM
             self.llm = self._create_llm()
-            logger.debug(f"{component_name} LLM initialized with model: {self._get_model_name()}")
+            model_name = self._get_model_name()
 
-            log_system_event(f"{component_name}_initialization_completed",
-                           f"{component_name} initialized successfully")
+            # Логируем детальную информацию о модели
+            log_model_info(
+                model_name,
+                {
+                    "temperature": self.model_config.get('temperature', 0.6),
+                    "max_tokens": self.model_config.get('max_tokens', 2000),
+                    "api_base": self.model_config['api_base']
+                },
+                self.component_name
+            )
+
+            log_bot_startup(f"{component_name}_ready", f"{component_name} initialized with {model_name}")
 
         except Exception as e:
-            log_system_event(f"{component_name}_initialization_failed",
-                           f"Failed to initialize {component_name}: {str(e)}", "ERROR")
+            log_system_event(f"{component_name}_init_failed", f"Failed to initialize {component_name}: {str(e)}", "ERROR")
             raise
 
     def _create_llm(self) -> ChatOpenAI:

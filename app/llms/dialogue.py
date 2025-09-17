@@ -7,7 +7,7 @@ from langchain_community.chat_message_histories import ChatMessageHistory
 from app.llms.base import LLMBase
 from app.security.moderator import LLMModerator
 from app.utils.config import SYSTEM_PROMPT
-from app.utils.log import logger, log_user_action, log_security_event, log_api_call, log_metrics, log_system_event
+from app.utils.log import logger, log_user_action, log_error, log_system_event, log_bot_startup
 
 
 class DialogueBot(LLMBase):
@@ -27,10 +27,12 @@ class DialogueBot(LLMBase):
         self.system_prompt = system_prompt or SYSTEM_PROMPT
 
         # Инициализируем модератор
+        log_bot_startup("moderator_init", "Initializing security moderator")
         self.moderator = LLMModerator(folder_id, openai_api_key)
-        logger.debug("DialogueBot moderator initialized")
+        log_bot_startup("moderator_ready", "Security moderator initialized")
 
         # Настраиваем диалоговую цепочку
+        log_bot_startup("dialogue_chain", "Setting up dialogue chain with message history")
         self._setup_dialogue_chain()
 
         # Словарь для хранения истории сессий
@@ -46,6 +48,8 @@ class DialogueBot(LLMBase):
             "active_sessions": 0
         }
 
+        log_bot_startup("dialogue_bot_ready", "DialogueBot initialization completed")
+
     def _setup_dialogue_chain(self):
         """Настройка цепочки для диалога с историей"""
         # Создаем промпт с поддержкой истории
@@ -54,11 +58,9 @@ class DialogueBot(LLMBase):
             MessagesPlaceholder(variable_name="history"),
             ("human", "{input}")
         ])
-        logger.debug("Dialogue prompt template created with system message and history support")
 
         # Создаем цепочку с поддержкой истории
         self.chain = self.prompt | self.llm
-        logger.debug("Dialogue chain created")
 
         # Создаем цепочку с историей сообщений
         self.conversation = RunnableWithMessageHistory(
@@ -67,14 +69,12 @@ class DialogueBot(LLMBase):
             input_messages_key="input",
             history_messages_key="history"
         )
-        logger.debug("Conversation chain with message history created")
 
     def _get_session_history(self, session_id: str):
         """Получение истории сессии"""
         if session_id not in self.store:
             self.store[session_id] = ChatMessageHistory()
             self.stats["active_sessions"] = len(self.store)
-            logger.debug(f"New session created: {session_id}, total sessions: {self.stats['active_sessions']}")
         return self.store[session_id]
 
     def process_request(self, question: str, session_id: str = "default") -> str:
@@ -95,13 +95,6 @@ class DialogueBot(LLMBase):
         start_time = time.time()
         self.stats["total_requests"] += 1
 
-        log_user_action(
-            user_id=session_id,
-            session_id=session_id,
-            action="gpt_request_started",
-            details=f"Question length: {len(question)} chars"
-        )
-
         try:
             # Используем современную цепочку с историей
             response = self.conversation.invoke(
@@ -113,54 +106,12 @@ class DialogueBot(LLMBase):
             self.stats["successful_requests"] += 1
             self.stats["total_response_time"] += duration
 
-            log_api_call(
-                user_id=session_id,
-                session_id=session_id,
-                api_name="yandex_gpt",
-                duration=duration,
-                success=True,
-                details=f"Response length: {len(response.content)} chars"
-            )
-
-            log_metrics(
-                user_id=session_id,
-                session_id=session_id,
-                metric_name="response_time",
-                value=duration,
-                unit="seconds"
-            )
-
-            log_user_action(
-                user_id=session_id,
-                session_id=session_id,
-                action="gpt_request_completed",
-                details=f"Duration: {duration:.3f}s, Response length: {len(response.content)} chars"
-            )
-
             return response.content
 
         except Exception as e:
             duration = time.time() - start_time
             self.stats["failed_requests"] += 1
-
-            log_api_call(
-                user_id=session_id,
-                session_id=session_id,
-                api_name="yandex_gpt",
-                duration=duration,
-                success=False,
-                details=f"Error: {str(e)}"
-            )
-
-            log_user_action(
-                user_id=session_id,
-                session_id=session_id,
-                action="gpt_request_failed",
-                details=f"Error: {str(e)}, Duration: {duration:.3f}s",
-                level="ERROR"
-            )
-
-            logger.error(f"Error in ask_gpt for session {session_id}: {str(e)}")
+            log_error(session_id, session_id, f"GPT request failed: {str(e)}")
             raise
 
     def clear_memory(self, session_id: str = "default"):
@@ -168,17 +119,7 @@ class DialogueBot(LLMBase):
         if session_id in self.store:
             message_count = len(self.store[session_id].messages)
             self.store[session_id].clear()
-
-            log_user_action(
-                user_id=session_id,
-                session_id=session_id,
-                action="memory_cleared",
-                details=f"Cleared {message_count} messages from history"
-            )
-
-            logger.info(f"Memory cleared for session {session_id}, removed {message_count} messages")
-        else:
-            logger.warning(f"Attempted to clear memory for non-existent session: {session_id}")
+            log_user_action(session_id, session_id, "memory_cleared", f"{message_count} messages")
 
     def get_stats(self) -> Dict[str, Any]:
         """Получение статистики бота"""
@@ -195,14 +136,6 @@ class DialogueBot(LLMBase):
                 if self.stats["total_requests"] > 0 else 0
             )
         }
-
-        log_metrics(
-            user_id="system",
-            session_id="system",
-            metric_name="bot_stats",
-            value=stats["total_requests"],
-            unit="total_requests"
-        )
 
         return stats
 

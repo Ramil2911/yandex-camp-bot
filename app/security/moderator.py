@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
 from app.llms.base import LLMBase
-from app.utils.log import logger, log_user_action, log_security_event, log_api_call, log_metrics, log_system_event
+from app.utils.log import logger, log_security_event, log_error, log_model_info, log_bot_startup
 
 
 class ModeratorVerdict(BaseModel):
@@ -37,6 +37,8 @@ class LLMModerator(LLMBase):
     """Модератор на базе LLM для проверки пользовательских запросов"""
 
     def __init__(self, folder_id: str = None, openai_api_key: str = None):
+        log_bot_startup("moderator_config", "Setting up security moderator configuration")
+
         # Конфигурация для модератора (низкая температура для детерминированности)
         moderator_config = {
             "model_name": "yandexgpt-lite/latest",
@@ -53,6 +55,7 @@ class LLMModerator(LLMBase):
         )
 
         # Инициализируем цепочку модерации
+        log_bot_startup("moderation_chain", "Setting up moderation chain")
         self._setup_moderation_chain()
 
     def _setup_moderation_chain(self):
@@ -103,38 +106,17 @@ class LLMModerator(LLMBase):
                 raw = self.moderator_chain.invoke({"prompt": text})
                 verdict = self._parser.parse(raw.content)
 
-            # Логируем вердикт
-            log_security_event(
-                user_id=user_id,
-                session_id=session_id,
-                event="moderation_verdict",
-                details=f"{verdict.model_dump()}",
-                severity="INFO" if verdict.decision == "allow" else "WARNING"
-            )
-
-            # Логируем метрики
-            log_api_call(
-                user_id=user_id,
-                session_id=session_id,
-                api_name="security_moderator",
-                duration=0.0,  # Можно добавить измерение времени если нужно
-                success=True,
-                details=f"Decision: {verdict.decision}"
-            )
+            # Логируем только блокировки и флаги
+            if verdict.decision != "allow":
+                log_security_event(user_id, session_id, "moderation", f"{verdict.decision}: {verdict.reason}")
 
             return verdict
 
         except Exception as e:
-            logger.error(f"Moderation error for user {user_id}: {str(e)}")
+            log_error(user_id, session_id, f"Moderation failed: {str(e)}")
 
             # На отказ модерации — перестраховываемся: считаем 'flag'
-            log_security_event(
-                user_id=user_id,
-                session_id=session_id,
-                event="moderation_error",
-                details=str(e),
-                severity="ERROR"
-            )
+            log_security_event(user_id, session_id, "moderation_error", "Fallback to flag")
 
             return ModeratorVerdict(
                 decision="flag",

@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from app.utils.log import logger, log_security_event
+from app.utils.log import log_security_event
 
 MALICIOUS_PROMPT_PATTERNS = [
 
@@ -163,52 +163,29 @@ def is_malicious_prompt(text: str, user_id: str = "unknown", session_id: str = "
     Возвращает bool.
     """
     if not text or not isinstance(text, str):
-        logger.debug(f"Empty or invalid text provided for security check: {type(text)}")
         return False
-
-    logger.debug(f"Starting security check for user {user_id}, session {session_id}, text length: {len(text)}")
 
     # Базовая нормализация
     base = _normalize(text)
-    logger.debug(f"Normalized text: {base[:100]}...")
 
     # Деобфускация: схлопываем «р а з б и т ы е» строки
     collapsed = _collapse_broken_words(base)
-    if collapsed != base:
-        logger.debug(f"Text deobfuscated: {collapsed[:100]}...")
 
     # Варианты с гомоглифами
     cyr_variant, lat_variant = _apply_homoglyph_pass(collapsed)
-    logger.debug(f"Generated homoglyph variants: cyr={cyr_variant[:50]}..., lat={lat_variant[:50]}...")
 
     candidates = {base, collapsed, cyr_variant.lower(), lat_variant.lower()}
 
     # Быстрая эвристика: очень длинные base64/hex блоки сами по себе — подозрительны
     if re.search(r"\b[A-Za-z0-9+/]{400,}={0,2}\b", base) or re.search(r"\b(?:[0-9A-Fa-f]{2}\s*){128,}\b", base):
-        log_security_event(
-            user_id=user_id,
-            session_id=session_id,
-            event="suspicious_encoding_detected",
-            details=f"Long base64/hex block detected in text: {text[:200]}...",
-            severity="WARNING"
-        )
-        logger.warning(f"Suspicious encoding detected for user {user_id}: long base64/hex block")
+        log_security_event(user_id, session_id, "suspicious_encoding", "Long base64/hex block")
         return True
 
     # Прогоняем все регулярки по всем вариантам
     for variant in candidates:
         for i, rx in enumerate(MALICIOUS_PROMPT_PATTERNS):
             if rx.search(variant):
-                matched_pattern = rx.pattern[:100] + "..." if len(rx.pattern) > 100 else rx.pattern
-                log_security_event(
-                    user_id=user_id,
-                    session_id=session_id,
-                    event="malicious_pattern_matched",
-                    details=f"Pattern #{i+1} matched: {matched_pattern}, variant: {variant[:200]}...",
-                    severity="WARNING"
-                )
-                logger.warning(f"Malicious pattern #{i+1} matched for user {user_id}: {matched_pattern}")
+                log_security_event(user_id, session_id, "malicious_pattern", f"Pattern #{i+1}")
                 return True
-    
-    logger.debug(f"Security check passed for user {user_id}, no malicious patterns detected")
+
     return False
