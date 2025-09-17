@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from log import logger, log_security_event
+from app.utils.log import logger, log_security_event
 
 MALICIOUS_PROMPT_PATTERNS = [
 

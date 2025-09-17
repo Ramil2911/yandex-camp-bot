@@ -7,7 +7,7 @@ from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser
 
-from log import logger, log_user_action, log_security_event, log_api_call, log_metrics, log_system_event
+from app.utils.log import logger, log_user_action, log_security_event, log_api_call, log_metrics, log_system_event
 
 
 
