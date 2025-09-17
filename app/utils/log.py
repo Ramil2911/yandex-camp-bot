@@ -11,7 +11,7 @@ log_dir.mkdir(exist_ok=True)
 # Форматирование для консоли: [Время] [Уровень] [Модуль:Строка] Сообщение
 CONSOLE_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-    "<level>{level:<8}</level> | "
+    "<level>{level:<16}</level> | "
     "<cyan>{name}:{line:<4}</cyan> | "
     "<level>{message}</level>"
 )
