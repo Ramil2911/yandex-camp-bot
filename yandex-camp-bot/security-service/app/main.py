@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 
 from common.config import config
-from common.utils.tracing_middleware import TracingMiddleware, log_error, log_to_monitoring
+from common.utils.tracing_middleware import TracingMiddleware, log_error, log_to_monitoring, monitoring_client
 from .models import SecurityCheckRequest, SecurityCheckResponse, SecurityHealthCheckResponse, LogEntry
 from .moderator import LLMModerator
 from .heuristics import is_malicious_prompt
@@ -45,10 +45,42 @@ async def lifespan(app: FastAPI):
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         logger.error("LLM Moderator will not be available. Service will work with heuristics only.")
+        
+        # Отправляем ошибку в мониторинг синхронно
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(monitoring_client.report_error(
+                service="security-service",
+                error_type="ConfigurationError",
+                error_message=str(e),
+                context={"component": "LLMModerator", "error": "Configuration validation failed"}
+            ))
+            loop.close()
+        except Exception as monitoring_error:
+            logger.error(f"Failed to send error to monitoring: {monitoring_error}")
+        
         moderator = None
     except Exception as e:
         logger.error(f"Failed to initialize LLM Moderator: {e}")
         logger.error("LLM Moderator will not be available. Service will work with heuristics only.")
+        
+        # Отправляем ошибку в мониторинг синхронно
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(monitoring_client.report_error(
+                service="security-service",
+                error_type="InitializationError",
+                error_message=str(e),
+                context={"component": "LLMModerator", "error": "LLM initialization failed"}
+            ))
+            loop.close()
+        except Exception as monitoring_error:
+            logger.error(f"Failed to send error to monitoring: {monitoring_error}")
+        
         moderator = None
 
     yield

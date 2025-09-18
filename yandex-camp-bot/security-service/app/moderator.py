@@ -6,6 +6,7 @@ from langchain_core.output_parsers import JsonOutputParser
 
 from common.llm import LLMBase
 from common.utils.tracing_middleware import log_error
+from common.config import config
 from .models import ModeratorVerdict
 import logging
 
@@ -33,11 +34,8 @@ class LLMModerator(LLMBase):
         if not folder_id or not folder_id.strip():
             raise ValueError("folder_id is required and cannot be empty for LLMModerator")
 
-        # Конфигурация для модератора (низкая температура для детерминированности)
-        # Используем правильный формат модели для Yandex Cloud
-        model_name = "yandexgpt-lite/latest"
         moderator_config = {
-            "model_name": model_name,
+            "model_name": f"gpt://{config.yc_folder_id}/yandexgpt-lite/latest",
             "temperature": 0.0,
             "max_tokens": 600,
             "api_base": "https://llm.api.cloud.yandex.net/v1"

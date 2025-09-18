@@ -28,135 +28,199 @@ def show_full_trace_details(full_trace: Dict[str, Any]):
         st.error("Нет данных для отображения")
         return
 
+    # Отладочная информация (можно убрать в продакшене)
+    with st.expander("🔍 Отладочная информация", expanded=False):
+        st.write(f"Ключи в данных: {list(full_trace.keys())}")
+        st.write(f"Полные данные: {full_trace}")
+
     st.subheader("🔍 Полный трейс запроса")
 
     # Основная информация
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Request ID", full_trace.get("request_id", "N/A"))
+        request_id = full_trace.get("request_id", "N/A")
+        st.metric("Request ID", request_id)
     with col2:
-        st.metric("Trace ID", full_trace.get("trace_id", "N/A"))
+        trace_id = full_trace.get("trace_id", "N/A")
+        st.metric("Trace ID", trace_id)
     with col3:
-        st.metric("Статус", full_trace.get("status", "N/A"))
+        status = full_trace.get("status", "N/A")
+        st.metric("Статус", status)
 
     # Время выполнения
-    if full_trace.get("start_time") and full_trace.get("end_time"):
-        start_time = full_trace["start_time"]
-        end_time = full_trace["end_time"]
-        duration = full_trace.get("total_duration", 0)
+    st.subheader("⏰ Время выполнения")
+    start_time = full_trace.get("start_time")
+    end_time = full_trace.get("end_time")
+    duration = full_trace.get("total_duration")
+    
+    if start_time:
         st.write(f"**Время начала:** {start_time}")
+    else:
+        st.write("**Время начала:** N/A")
+        
+    if end_time:
         st.write(f"**Время окончания:** {end_time}")
-        st.write(f"**Общее время выполнения:** {duration:.2f}ms" if duration else "N/A")
+    else:
+        st.write("**Время окончания:** N/A")
+        
+    if duration:
+        st.write(f"**Общее время выполнения:** {duration:.2f}ms")
+    else:
+        st.write("**Общее время выполнения:** N/A")
 
     # Путь через сервисы
     st.subheader("🏗️ Путь через сервисы")
-    if full_trace.get("services_path"):
-        services_df = pd.DataFrame(full_trace["services_path"])
-        if not services_df.empty:
-            # Выбираем нужные колонки для отображения
-            display_cols = ["service", "operation", "duration", "status"]
-            available_cols = [col for col in display_cols if col in services_df.columns]
+    services_path = full_trace.get("services_path", [])
+    st.write(f"**Количество сервисов в пути:** {len(services_path)}")
+    
+    if services_path:
+        st.write("**Данные пути через сервисы:**")
+        st.json(services_path)
+        
+        try:
+            services_df = pd.DataFrame(services_path)
+            if not services_df.empty:
+                st.write("**Таблица сервисов:**")
+                # Выбираем нужные колонки для отображения
+                display_cols = ["service", "operation", "duration", "status"]
+                available_cols = [col for col in display_cols if col in services_df.columns]
+                st.write(f"Доступные колонки: {available_cols}")
 
-            if available_cols:
-                st.dataframe(
-                    services_df[available_cols],
-                    use_container_width=True
-                )
+                if available_cols:
+                    st.dataframe(
+                        services_df[available_cols],
+                        use_container_width=True
+                    )
+                else:
+                    st.write("**Все колонки:**")
+                    st.dataframe(services_df, use_container_width=True)
+            else:
+                st.warning("DataFrame пустой")
+        except Exception as e:
+            st.error(f"Ошибка при создании DataFrame: {str(e)}")
+    else:
+        st.warning("Нет данных о пути через сервисы")
 
-                # Timeline визуализация
-                st.subheader("⏱️ Timeline выполнения")
-                fig = go.Figure()
+    # Timeline визуализация
+    if services_path:
+        st.subheader("⏱️ Timeline выполнения")
+        try:
+            fig = go.Figure()
 
-                for i, service in enumerate(full_trace["services_path"]):
+            for i, service in enumerate(services_path):
+                start_time = service.get("start_time")
+                end_time = service.get("end_time")
+                service_name = service.get("service", f"Service {i}")
+                
+                if start_time and end_time:
                     fig.add_trace(go.Scatter(
-                        x=[service.get("start_time"), service.get("end_time")],
-                        y=[service.get("service"), service.get("service")],
+                        x=[start_time, end_time],
+                        y=[service_name, service_name],
                         mode='lines+markers',
-                        name=service.get("service"),
+                        name=service_name,
                         line=dict(width=4),
                         marker=dict(size=8)
                     ))
 
-                fig.update_layout(
-                    title="Временная шкала выполнения запроса",
-                    xaxis_title="Время",
-                    yaxis_title="Сервис",
-                    showlegend=True
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            fig.update_layout(
+                title="Временная шкала выполнения запроса",
+                xaxis_title="Время",
+                yaxis_title="Сервис",
+                showlegend=True
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Ошибка при создании timeline: {str(e)}")
 
     # Ошибки в трейсе
-    if full_trace.get("errors"):
-        st.subheader("🚨 Детальный анализ ошибок в трейсе")
+    errors = full_trace.get("errors", [])
+    st.subheader("🚨 Детальный анализ ошибок в трейсе")
+    st.write(f"**Количество ошибок в трейсе:** {len(errors)}")
+    
+    if errors:
+        st.write("**Данные об ошибках:**")
+        st.json(errors)
 
         # Статистика ошибок
-        errors_df = pd.DataFrame(full_trace["errors"])
-        if not errors_df.empty:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Всего ошибок в трейсе", len(errors_df))
-            with col2:
-                st.metric("Сервисов с ошибками", errors_df['service'].nunique() if 'service' in errors_df.columns else 0)
-            with col3:
-                st.metric("Категорий ошибок", errors_df['category'].nunique() if 'category' in errors_df.columns else 0)
-
-        # Таблица всех ошибок в трейсе
-        if not errors_df.empty:
-            st.subheader("📋 Все ошибки в трейсе")
-            st.dataframe(
-                errors_df[['timestamp', 'service', 'error_type', 'category', 'error_message']].head(10),
-                use_container_width=True,
-                column_config={
-                    "timestamp": st.column_config.DatetimeColumn("Время", format="DD.MM.YYYY HH:mm:ss"),
-                    "service": "Сервис",
-                    "error_type": "Тип ошибки",
-                    "category": "Категория",
-                    "error_message": st.column_config.TextColumn("Сообщение", width="large"),
-                }
-            )
-
-        # Детальный просмотр каждой ошибки
-        for i, error in enumerate(full_trace["errors"]):
-            with st.expander(f"❌ Ошибка {i+1}: {error.get('service')} - {error.get('error_type')} - {error.get('category', 'unknown')}"):
-
-                # Основная информация
-                col1, col2 = st.columns(2)
+        try:
+            errors_df = pd.DataFrame(errors)
+            if not errors_df.empty:
+                col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.write(f"**🕒 Время:** {error.get('timestamp', 'N/A')}")
-                    st.write(f"**🏢 Сервис:** {error.get('service', 'N/A')}")
-                    st.write(f"**⚠️ Тип ошибки:** {error.get('error_type', 'N/A')}")
-                    st.write(f"**🏷️ Категория:** {error.get('category', 'N/A')}")
-
+                    st.metric("Всего ошибок в трейсе", len(errors_df))
                 with col2:
-                    st.write(f"**🆔 Trace ID:** `{error.get('trace_id', 'N/A')}`")
-                    st.write(f"**📝 Request ID:** `{error.get('request_id', 'N/A')}`")
+                    st.metric("Сервисов с ошибками", errors_df['service'].nunique() if 'service' in errors_df.columns else 0)
+                with col3:
+                    st.metric("Категорий ошибок", errors_df['category'].nunique() if 'category' in errors_df.columns else 0)
+                # Таблица всех ошибок в трейсе
+                if not errors_df.empty:
+                    st.subheader("📋 Все ошибки в трейсе")
+                    try:
+                        display_cols = ['timestamp', 'service', 'error_type', 'category', 'error_message']
+                        available_cols = [col for col in display_cols if col in errors_df.columns]
+                        
+                        if available_cols:
+                            st.dataframe(
+                                errors_df[available_cols].head(10),
+                                use_container_width=True,
+                                column_config={
+                                    "timestamp": st.column_config.DatetimeColumn("Время", format="DD.MM.YYYY HH:mm:ss"),
+                                    "service": "Сервис",
+                                    "error_type": "Тип ошибки",
+                                    "category": "Категория",
+                                    "error_message": st.column_config.TextColumn("Сообщение", width="large"),
+                                }
+                            )
+                        else:
+                            st.dataframe(errors_df.head(10), use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Ошибка при отображении таблицы ошибок: {str(e)}")
 
-                # Полное сообщение об ошибке
-                st.subheader("📄 Полное сообщение об ошибке")
-                message = error.get('error_message', '')
-                if len(message) > 300:
-                    st.text_area(f"Сообщение ошибки {i+1}", message, height=100, disabled=True, key=f"error_msg_{i}")
-                else:
-                    st.code(message, language="text")
+                # Детальный просмотр каждой ошибки
+                for i, error in enumerate(errors):
+                    with st.expander(f"❌ Ошибка {i+1}: {error.get('service')} - {error.get('error_type')} - {error.get('category', 'unknown')}"):
+                        # Основная информация
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**🕒 Время:** {error.get('timestamp', 'N/A')}")
+                            st.write(f"**🏢 Сервис:** {error.get('service', 'N/A')}")
+                            st.write(f"**⚠️ Тип ошибки:** {error.get('error_type', 'N/A')}")
+                            st.write(f"**🏷️ Категория:** {error.get('category', 'N/A')}")
 
-                # Stack trace
-                if error.get("stack_trace"):
-                    with st.expander("📄 Stack Trace"):
-                        st.code(error.get("stack_trace", ""), language="text")
+                        with col2:
+                            st.write(f"**🆔 Trace ID:** `{error.get('trace_id', 'N/A')}`")
+                            st.write(f"**📝 Request ID:** `{error.get('request_id', 'N/A')}`")
 
-                # Контекст ошибки
-                if error.get("context"):
-                    with st.expander("📋 Контекст ошибки"):
-                        st.json(error.get("context", {}))
+                        # Полное сообщение об ошибке
+                        st.subheader("📄 Полное сообщение об ошибке")
+                        message = error.get('error_message', '')
+                        if len(message) > 300:
+                            st.text_area(f"Сообщение ошибки {i+1}", message, height=100, disabled=True, key=f"error_msg_{i}")
+                        else:
+                            st.code(message, language="text")
 
-                # Связанные данные
-                if error.get("user_id") or error.get("session_id"):
-                    st.subheader("👤 Информация о пользователе")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write(f"**Пользователь:** {error.get('user_id', 'N/A')}")
-                    with col2:
-                        st.write(f"**Сессия:** {error.get('session_id', 'N/A')}")
+                        # Stack trace
+                        if error.get("stack_trace"):
+                            with st.expander("📄 Stack Trace"):
+                                st.code(error.get("stack_trace", ""), language="text")
+
+                        # Контекст ошибки
+                        if error.get("context"):
+                            with st.expander("📋 Контекст ошибки"):
+                                st.json(error.get("context", {}))
+
+                        # Связанные данные
+                        if error.get("user_id") or error.get("session_id"):
+                            st.subheader("👤 Информация о пользователе")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Пользователь:** {error.get('user_id', 'N/A')}")
+                            with col2:
+                                st.write(f"**Сессия:** {error.get('session_id', 'N/A')}")
+        except Exception as e:
+            st.error(f"Ошибка при обработке статистики ошибок: {str(e)}")
+    else:
+        st.info("В этом трейсе нет ошибок")
 
 
 def show_error_details(errors_data, error_category):
@@ -547,13 +611,10 @@ def get_technical_errors(limit: int = 10) -> List[Dict[str, Any]]:
 def get_full_trace(trace_id: str) -> Dict[str, Any]:
     """Получить полный трейс ошибки"""
     try:
-        st.write(f"🔍 Запрашиваем трейс с ID: {trace_id}")
         response = requests.get(f"{MONITORING_SERVICE_URL}/trace/{trace_id}/full", timeout=5)
-        st.write(f"📡 Ответ сервера: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
-            st.write(f"✅ Получены данные трейса: {len(data.get('services_path', []))} сервисов, {len(data.get('errors', []))} ошибок")
             return data
         elif response.status_code == 404:
             st.error(f"Трейс с ID {trace_id} не найден")
