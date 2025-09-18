@@ -193,3 +193,12 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
+
+*.pdf
+*.txt
+*.DS_Store
+*.sqlite3
+*.db
+*.db-journal
+*.bin
+*.pickle
