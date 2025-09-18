@@ -65,7 +65,7 @@ app.middleware("http")(TracingMiddleware("rag-service"))
 
 @app.post("/search", response_model=RAGSearchResponse)
 async def search_documents(request: RAGSearchRequest):
-    """Поиск релевантных документов"""
+    """Поиск релевантных документов с улучшенным анализом"""
     if not rag_system:
         raise HTTPException(status_code=503, detail="RAG System not available")
 
@@ -74,11 +74,27 @@ async def search_documents(request: RAGSearchRequest):
             request.query, request.user_id, request.session_id
         )
 
-        return RAGSearchResponse(**result)
+        # Создаем ответ, включая новые поля анализа если они есть
+        response_data = {
+            "context": result["context"],
+            "documents_found": result["documents_found"],
+            "search_time": result["search_time"],
+            "documents_info": result.get("documents_info", []),
+            "similarity_scores": result.get("similarity_scores", []),
+            "error": result.get("error")
+        }
+
+        # Добавляем новые поля если они есть (для обратной совместимости)
+        if "analysis_result" in result and result["analysis_result"]:
+            response_data["analysis_result"] = result["analysis_result"]
+        if "queries_used" in result and result["queries_used"]:
+            response_data["queries_used"] = result["queries_used"]
+
+        return RAGSearchResponse(**response_data)
 
     except Exception as e:
         logger.error(f"Search failed for user {request.user_id}: {str(e)}")
-        
+
         # Отправляем детальную информацию об ошибке в monitoring-service
         log_error(
             service="rag-service",
@@ -92,7 +108,7 @@ async def search_documents(request: RAGSearchRequest):
                 "rag_system_available": rag_system is not None
             }
         )
-        
+
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
