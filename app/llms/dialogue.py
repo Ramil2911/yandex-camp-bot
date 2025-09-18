@@ -31,6 +31,8 @@ class DialogueBot(LLMBase):
         self.moderator = LLMModerator(folder_id, openai_api_key)
         log_bot_startup("moderator_ready", "Security moderator initialized")
 
+        # RAG теперь обрабатывается в пайплайне, не в диалоговом боте
+
         # Настраиваем диалоговую цепочку
         log_bot_startup("dialogue_chain", "Setting up dialogue chain with message history")
         self._setup_dialogue_chain()
@@ -113,6 +115,7 @@ class DialogueBot(LLMBase):
             self.stats["failed_requests"] += 1
             log_error(session_id, session_id, f"GPT request failed: {str(e)}")
             raise
+
 
     def clear_memory(self, session_id: str = "default"):
         """Очистка памяти разговора"""

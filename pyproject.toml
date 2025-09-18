@@ -17,6 +17,9 @@ langchain-openai = ">=0.3.33,<0.4.0"
 langchain-community = ">=0.3.29,<0.4.0"
 langchain-core = ">=0.3.76,<0.4.0"
 boto3 = "^1.40.32"
+chromadb = ">=0.5.0,<0.6.0"
+sentence-transformers = ">=3.0.0,<4.0.0"
+pypdf = ">=4.0.0,<5.0.0"
 
 [tool.poetry.scripts]
 bot = "app.main:main"

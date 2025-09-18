@@ -21,6 +21,7 @@ from app.utils.log import (
     log_error, log_system_event
 )
 from .logging_middleware import LoggingRunnable, pipeline_metrics
+from .rag_pipeline import RAGPipelineStage
 
 
 class TelegramBotPipeline:
@@ -29,20 +30,23 @@ class TelegramBotPipeline:
     Объединяет все этапы: безопасность, модерацию, диалог.
     """
     
-    def __init__(self, dialogue_bot: DialogueBot):
+    def __init__(self, dialogue_bot: DialogueBot, rag_stage: RAGPipelineStage = None):
         """
         Инициализация пайплайна
         
         Args:
             dialogue_bot: Экземпляр диалогового бота
+            rag_stage: RAG этап пайплайна (если None, создается новый)
         """
         self.dialogue_bot = dialogue_bot
+        self.rag_stage = rag_stage or RAGPipelineStage()
         self.stats = {
             "pipeline_requests": 0,
             "pipeline_successes": 0,
             "pipeline_errors": 0,
             "security_blocks": 0,
-            "moderator_blocks": 0
+            "moderator_blocks": 0,
+            "rag_processed": 0
         }
         
         # Создаем основной пайплайн с логированием
@@ -73,8 +77,8 @@ class TelegramBotPipeline:
                 (lambda x: self._check_moderator(x), 
                  RunnableLambda(self._handle_moderator_block)),
                 
-                # Обычный диалог (default)
-                RunnableLambda(self._handle_dialogue)
+                # RAG обработка + диалог (default)
+                RunnableLambda(self._handle_rag_and_dialogue)
             )
             # Завершение обработки
             | RunnableLambda(self._finish_processing)
@@ -174,29 +178,37 @@ class TelegramBotPipeline:
             "success": True
         }
     
-    def _handle_dialogue(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Обработка обычного диалога"""
-        message = input_data.get("message", "")
-        session_id = input_data.get("session_id", "default")
+    async def _handle_rag_and_dialogue(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Обработка RAG + диалог"""
         user_id = input_data.get("user_id", "unknown")
+        session_id = input_data.get("session_id", "default")
         
         try:
+            # 1. RAG этап - поиск релевантной информации
+            rag_result = await self.rag_stage.process(input_data)
+            
+            # Обновляем статистику RAG
+            if rag_result.get("rag_used", False):
+                self.stats["rag_processed"] += 1
+            
+            # 2. Диалог этап - обработка запроса с контекстом
+            message = rag_result.get("enhanced_message", rag_result.get("message", ""))
             response = self.dialogue_bot.ask_gpt(message, session_id)
             
             return {
-                **input_data,
+                **rag_result,
                 "response": response,
-                "pipeline_stage": "dialogue_success",
+                "pipeline_stage": "rag_dialogue_success",
                 "success": True
             }
             
         except Exception as e:
-            log_error(user_id, session_id, f"Dialogue processing failed: {str(e)}")
+            log_error(user_id, session_id, f"RAG + Dialogue processing failed: {str(e)}")
             
             return {
                 **input_data,
                 "response": BOT_MESSAGES["error"],
-                "pipeline_stage": "dialogue_error",
+                "pipeline_stage": "rag_dialogue_error",
                 "success": False,
                 "error": str(e)
             }
@@ -213,7 +225,7 @@ class TelegramBotPipeline:
         
         # Логируем только ошибки или блокировки
         stage = input_data.get("pipeline_stage", "unknown")
-        if stage in ["dialogue_error", "heuristic_block", "moderator_block"]:
+        if stage in ["rag_dialogue_error", "heuristic_block", "moderator_block"]:
             user_id = input_data.get("user_id", "unknown")
             session_id = input_data.get("session_id", "unknown")
             log_system_event(f"pipeline_{stage}", f"Duration: {duration:.2f}s", "INFO")
@@ -277,6 +289,7 @@ class TelegramBotPipeline:
             **self.stats,
             "success_rate": success_rate,
             "dialogue_bot_stats": self.dialogue_bot.get_stats(),
+            "rag_stats": self.rag_stage.get_stats(),
             "logging_stats": logging_stats,
             "pipeline_metrics": pipeline_metrics.get_all_stats()
         }

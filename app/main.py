@@ -1,11 +1,24 @@
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
+import asyncio
 
 from app.utils.config import TELEGRAM_TOKEN, OPENAI_API_KEY, FOLDER_ID
 from app.handlers import (
-    start, clear_memory, help_command, stats_command,
-    handle_message, error_handler
+    start, clear_memory, help_command, stats_command, rag_command,
+    handle_message, error_handler, initialize_rag_system
 )
 from app.utils.log import logger, log_bot_startup, log_config_info, log_error, log_system_event
+
+
+async def initialize_bot_components():
+    """Инициализация компонентов бота при старте"""
+    log_bot_startup("rag_init", "Initializing RAG system...")
+    try:
+        await initialize_rag_system()
+        log_bot_startup("rag_init", "RAG system initialized successfully")
+    except Exception as e:
+        log_error("system", "rag_init", f"RAG initialization failed: {str(e)}")
+        logger.warning("RAG система не инициализирована, бот будет работать без RAG")
+        # Не прерываем запуск бота, если RAG не инициализировался
 
 
 def main():
@@ -26,6 +39,10 @@ def main():
         log_config_info("YANDEX_GPT", "configured", "env")
         log_config_info("YANDEX_FOLDER", f"folder_{FOLDER_ID[:8]}...", "env")
 
+        # Инициализируем компоненты бота
+        log_bot_startup("components_init", "Initializing bot components")
+        asyncio.run(initialize_bot_components())
+
         log_bot_startup("telegram_app", "Creating Telegram application")
         application = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -35,6 +52,7 @@ def main():
         application.add_handler(CommandHandler("clear", clear_memory))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("rag", rag_command))
 
         # Регистрируем обработчик текстовых сообщений
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
