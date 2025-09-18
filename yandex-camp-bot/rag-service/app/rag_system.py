@@ -210,6 +210,46 @@ class RAGSystem:
         self.stats["total_searches"] += 1
 
         try:
+            # Проверяем статус инициализации
+            if self.initialization_status != "ready":
+                if self.initialization_status == "initializing":
+                    error_msg = "RAG system is still initializing, please try again later"
+                elif self.initialization_status == "failed":
+                    error_msg = f"RAG system initialization failed: {self.initialization_error}"
+                else:
+                    error_msg = "RAG system is not ready"
+
+                search_time = time.time() - start_time
+                self.stats["failed_searches"] += 1
+
+                logger.warning(f"RAG search failed for user {user_id}: {error_msg} (time: {search_time:.2f}s)")
+
+                return {
+                    "context": "",
+                    "documents_found": 0,
+                    "search_time": search_time,
+                    "documents_info": [],
+                    "similarity_scores": [],
+                    "error": error_msg
+                }
+
+            # Проверяем, что vectorstore инициализирован
+            if self.vectorstore is None:
+                error_msg = "Vector store is not initialized"
+                search_time = time.time() - start_time
+                self.stats["failed_searches"] += 1
+
+                logger.error(f"RAG search failed for user {user_id}: {error_msg} (time: {search_time:.2f}s)")
+
+                return {
+                    "context": "",
+                    "documents_found": 0,
+                    "search_time": search_time,
+                    "documents_info": [],
+                    "similarity_scores": [],
+                    "error": error_msg
+                }
+
             similarity_threshold = config.rag_config["similarity_threshold"]
             min_docs = config.rag_config["min_documents"]
             max_search = config.rag_config["max_search_results"]
@@ -286,7 +326,8 @@ class RAGSystem:
                 "documents_found": len(filtered_results),
                 "search_time": search_time,
                 "documents_info": documents_info,
-                "similarity_scores": similarity_scores
+                "similarity_scores": similarity_scores,
+                "error": None
             }
 
         except Exception as e:
@@ -303,7 +344,8 @@ class RAGSystem:
                 "documents_found": 0,
                 "search_time": search_time,
                 "documents_info": [],
-                "similarity_scores": []
+                "similarity_scores": [],
+                "error": str(e)
             }
 
     def _get_file_type(self, content: str) -> str:

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from common.models import LogEntry, HealthCheckResponse
 
 
@@ -44,6 +44,9 @@ class RAGSearchResponse(BaseModel):
     context: str
     documents_found: int
     search_time: float
+    documents_info: Optional[List[Dict[str, Any]]] = None
+    similarity_scores: Optional[List[float]] = None
+    error: Optional[str] = None
 
 
 # LogEntry импортируется из common.models

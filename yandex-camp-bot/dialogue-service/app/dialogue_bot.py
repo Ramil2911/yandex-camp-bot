@@ -57,6 +57,10 @@ class DialogueBot:
 
         # Хранение истории сессий в памяти (в продакшене использовать Redis)
         self.store: Dict[str, ChatMessageHistory] = {}
+        # Хранение времени последнего доступа к сессиям
+        self.session_timestamps: Dict[str, float] = {}
+        # Хранение user_id для каждой сессии
+        self.session_users: Dict[str, str] = {}
 
         # Статистика
         self.stats = DialogueStats(
@@ -102,11 +106,22 @@ class DialogueBot:
             history_messages_key="history"
         )
 
+    def _initialize_session(self, session_id: str, user_id: str):
+        """Инициализация новой сессии с user_id"""
+        if session_id not in self.store:
+            self.store[session_id] = ChatMessageHistory()
+            self.session_users[session_id] = user_id
+            self.stats.active_sessions = len(self.store)
+            logger.info(f"New session initialized: {session_id} for user: {user_id}")
+
     def _get_session_history(self, session_id: str):
         """Получение истории сессии"""
         if session_id not in self.store:
             self.store[session_id] = ChatMessageHistory()
             self.stats.active_sessions = len(self.store)
+
+        # Обновляем timestamp последнего доступа
+        self.session_timestamps[session_id] = time.time()
         return self.store[session_id]
 
     def _prepare_context(self, context: Optional[Dict[str, Any]]) -> str:
@@ -121,13 +136,14 @@ class DialogueBot:
             return f"\nНайденная информация ({documents_found} документов):\n{rag_context}"
         return ""
 
-    async def process_message(self, message: str, session_id: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def process_message(self, message: str, session_id: str, user_id: str = "unknown", context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Обработка диалогового сообщения
 
         Args:
             message: Сообщение пользователя
             session_id: ID сессии
+            user_id: ID пользователя (по умолчанию "unknown")
             context: Дополнительный контекст (RAG и т.д.)
 
         Returns:
@@ -135,6 +151,9 @@ class DialogueBot:
         """
         start_time = time.time()
         self.stats.total_requests += 1
+
+        # Инициализируем сессию с user_id
+        self._initialize_session(session_id, user_id)
 
         try:
             # Подготовка контекста
@@ -208,9 +227,37 @@ class DialogueBot:
         if session_id in self.store:
             message_count = len(self.store[session_id].messages)
             self.store[session_id].clear()
+            # Удаляем связанные данные при очистке сессии
+            if session_id in self.session_timestamps:
+                del self.session_timestamps[session_id]
+            if session_id in self.session_users:
+                del self.session_users[session_id]
             logger.info(f"Memory cleared for session {session_id}: {message_count} messages")
             return message_count
         return 0
+
+    def get_dialogue_history(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Получение истории диалога для API"""
+        if session_id not in self.store:
+            return []
+
+        history = self.store[session_id]
+        messages = []
+
+        for msg in history.messages[-limit:]:  # Берем последние limit сообщений
+            messages.append({
+                "role": msg.type,
+                "content": msg.content,
+                "timestamp": time.time()
+            })
+
+        return messages
+
+    def search_dialogues_by_trace(self, trace_id: str) -> List[Dict[str, Any]]:
+        """Поиск диалогов по trace_id (заглушка, пока нет реализации трейсинга)"""
+        # В текущей реализации нет системы трейсинга, поэтому возвращаем пустой результат
+        logger.warning(f"Trace search not implemented yet for trace_id: {trace_id}")
+        return []
 
     def get_session_info(self, session_id: str) -> Optional[SessionMemory]:
         """Получение информации о сессии"""
@@ -224,15 +271,15 @@ class DialogueBot:
             messages.append(MemoryEntry(
                 role=msg.type,
                 content=msg.content,
-                timestamp=time.time()  # В реальном проекте хранить timestamp сообщений
+                timestamp=time.time()
             ))
 
         return SessionMemory(
             session_id=session_id,
             messages=messages,
-            created_at=time.time(),  # В реальном проекте хранить время создания
-            last_accessed=time.time(),
-            user_id="unknown"  # В реальном проекте связывать с user_id
+            created_at=time.time(),
+            last_accessed=self.session_timestamps.get(session_id, time.time()),
+            user_id=self.session_users.get(session_id, "unknown")
         )
 
     def get_stats(self) -> DialogueStats:
@@ -245,14 +292,19 @@ class DialogueBot:
         max_age_seconds = max_age_hours * 3600
 
         sessions_to_remove = []
-        for session_id, history in self.store.items():
-            # Проверяем время последнего доступа
-            # В реальном проекте нужно хранить timestamp последнего доступа
-            if current_time - time.time() > max_age_seconds:  # Заглушка
+        for session_id in list(self.store.keys()):
+            # Проверяем время последнего доступа из session_timestamps
+            last_access = self.session_timestamps.get(session_id, current_time)
+            if current_time - last_access > max_age_seconds:
                 sessions_to_remove.append(session_id)
 
         for session_id in sessions_to_remove:
             del self.store[session_id]
+            # Удаляем связанные данные
+            if session_id in self.session_timestamps:
+                del self.session_timestamps[session_id]
+            if session_id in self.session_users:
+                del self.session_users[session_id]
 
         if sessions_to_remove:
             logger.info(f"Cleaned up {len(sessions_to_remove)} old sessions")

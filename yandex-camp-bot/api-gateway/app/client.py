@@ -61,7 +61,14 @@ class ServiceClient:
         except Exception as e:
             logger.error(f"RAG service error: {e}")
             # Fallback: empty context if RAG is down
-            return RAGSearchResponse(context="", documents_found=0, search_time=0.0)
+            return RAGSearchResponse(
+                context="",
+                documents_found=0,
+                search_time=0.0,
+                documents_info=[],
+                similarity_scores=[],
+                error=f"RAG service error: {str(e)}"
+            )
 
     async def process_dialogue(self, request: DialogueRequest) -> DialogueResponse:
         """Обработка диалога через Dialogue Service"""

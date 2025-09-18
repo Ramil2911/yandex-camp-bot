@@ -22,6 +22,7 @@ class RAGSearchResponse(BaseModel):
     search_time: float
     documents_info: Optional[List[DocumentInfo]] = None
     similarity_scores: Optional[List[float]] = None
+    error: Optional[str] = None
 
 
 class RAGSystemInfo(BaseModel):

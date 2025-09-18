@@ -94,7 +94,7 @@ async def clear_memory(request: ClearMemoryRequest):
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        messages_cleared = await dialogue_bot.clear_memory(request.session_id)
+        messages_cleared = dialogue_bot.clear_memory(request.session_id)
 
         return ClearMemoryResponse(
             success=True,
@@ -131,7 +131,7 @@ async def get_session_info(session_id: str):
     if not dialogue_bot:
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
-    session_info = await dialogue_bot.get_session_info(session_id)
+    session_info = dialogue_bot.get_session_info(session_id)
     if not session_info:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -145,7 +145,7 @@ async def cleanup_sessions():
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        await dialogue_bot.cleanup_old_sessions()
+        dialogue_bot.cleanup_old_sessions()
         return {"message": "Sessions cleaned up successfully"}
     except Exception as e:
         logger.error(f"Session cleanup failed: {str(e)}")
@@ -212,7 +212,7 @@ async def get_dialogue_history(session_id: str, limit: int = 50):
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        history = await dialogue_bot.get_dialogue_history(session_id, limit)
+        history = dialogue_bot.get_dialogue_history(session_id, limit)
         return {
             "session_id": session_id,
             "history": history,
@@ -230,7 +230,7 @@ async def search_dialogues_by_trace(trace_id: str):
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        dialogues = await dialogue_bot.search_dialogues_by_trace(trace_id)
+        dialogues = dialogue_bot.search_dialogues_by_trace(trace_id)
         return {
             "trace_id": trace_id,
             "dialogues": dialogues,

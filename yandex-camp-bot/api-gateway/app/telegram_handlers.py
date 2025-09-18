@@ -211,6 +211,20 @@ async def handle_message(message: Message, bot: Bot):
 
         rag_response = await service_client.search_rag(rag_request)
 
+        # Проверяем, была ли ошибка в RAG поиске
+        if rag_response.error:
+            await service_client.log_event(LogEntry(
+                level="WARNING",
+                service="api-gateway",
+                message="RAG search returned error, proceeding without context",
+                user_id=user_id,
+                session_id=session_id,
+                extra={
+                    "error": rag_response.error,
+                    "search_time": rag_response.search_time
+                }
+            ))
+
         # 3. Обрабатываем диалог с контекстом
         dialogue_request = DialogueRequest(
             message=message_text,
