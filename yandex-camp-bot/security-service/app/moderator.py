@@ -35,7 +35,7 @@ class LLMModerator(LLMBase):
             raise ValueError("folder_id is required and cannot be empty for LLMModerator")
 
         moderator_config = {
-            "model_name": f"gpt://{config.yc_folder_id}/yandexgpt-lite/latest",
+            "model_name": "yandexgpt-lite/latest",
             "temperature": 0.0,
             "max_tokens": 600,
             "api_base": "https://llm.api.cloud.yandex.net/v1"

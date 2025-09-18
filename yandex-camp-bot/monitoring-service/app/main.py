@@ -227,19 +227,19 @@ async def get_system_stats(db: Session = Depends(get_db)):
         total_logs = db.query(LogEntryDB).count()
 
         # Логи за сегодня
-        today = datetime.utcnow().date()
+        today = datetime.now().date()
         logs_today = db.query(LogEntryDB).filter(
             LogEntryDB.timestamp >= today
         ).count()
 
         # Активные сервисы (логи за последний час)
-        last_hour = datetime.utcnow() - timedelta(hours=1)
+        last_hour = datetime.now() - timedelta(hours=1)
         active_services = db.query(LogEntryDB.service).filter(
             LogEntryDB.timestamp >= last_hour
         ).distinct().count()
 
         # Процент ошибок за 24 часа
-        yesterday = datetime.utcnow() - timedelta(days=1)
+        yesterday = datetime.now() - timedelta(days=1)
         total_24h = db.query(LogEntryDB).filter(
             LogEntryDB.timestamp >= yesterday
         ).count()
@@ -771,7 +771,7 @@ async def get_traces_count(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        start_time = datetime.utcnow() - timedelta(hours=hours)
+        start_time = datetime.now() - timedelta(hours=hours)
 
         query = db.query(
             TraceEntryDB.start_time,
@@ -820,7 +820,7 @@ async def get_errors_count(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        start_time = datetime.utcnow() - timedelta(hours=hours)
+        start_time = datetime.now() - timedelta(hours=hours)
 
         query = db.query(
             ErrorEntryDB.timestamp,
@@ -868,7 +868,7 @@ async def get_performance_metrics(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        start_time = datetime.utcnow() - timedelta(hours=hours)
+        start_time = datetime.now() - timedelta(hours=hours)
 
         query = db.query(
             TraceEntryDB.start_time,
@@ -934,7 +934,7 @@ async def get_services_summary(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        start_time = datetime.utcnow() - timedelta(hours=hours)
+        start_time = datetime.now() - timedelta(hours=hours)
 
         # Статистика трейсов по сервисам
         traces_stats = db.query(
@@ -993,6 +993,221 @@ async def get_services_summary(
         raise HTTPException(status_code=500, detail=f"Failed to get services summary: {str(e)}")
 
 
+@app.get("/security/violations")
+async def get_security_violations(
+    hours: int = 24,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """Получить нарушения безопасности"""
+    if not db_initialized:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        start_time = datetime.now() - timedelta(hours=hours)
+
+        # Получаем нарушения безопасности
+        violations = db.query(ErrorEntryDB).filter(
+            ErrorEntryDB.category == "security",
+            ErrorEntryDB.timestamp >= start_time
+        ).order_by(ErrorEntryDB.timestamp.desc()).limit(limit).offset(offset).all()
+
+        return [
+            {
+                "id": violation.id,
+                "trace_id": violation.trace_id,
+                "request_id": violation.request_id,
+                "service": violation.service,
+                "error_type": violation.error_type,
+                "error_message": violation.error_message,
+                "context": violation.context,
+                "timestamp": violation.timestamp,
+                "user_id": violation.user_id,
+                "session_id": violation.session_id,
+                "created_at": violation.created_at
+            }
+            for violation in violations
+        ]
+
+    except Exception as e:
+        logger.error(f"Failed to get security violations: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get security violations: {str(e)}")
+
+
+@app.get("/security/violations/stats")
+async def get_security_violations_stats(
+    hours: int = 24,
+    db: Session = Depends(get_db)
+):
+    """Получить статистику нарушений безопасности"""
+    if not db_initialized:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        start_time = datetime.now() - timedelta(hours=hours)
+
+        # Общее количество нарушений
+        total_violations = db.query(ErrorEntryDB).filter(
+            ErrorEntryDB.category == "security",
+            ErrorEntryDB.timestamp >= start_time
+        ).count()
+
+        # Нарушения по типам
+        violations_by_type = db.query(
+            ErrorEntryDB.error_type,
+            func.count(ErrorEntryDB.id).label('count')
+        ).filter(
+            ErrorEntryDB.category == "security",
+            ErrorEntryDB.timestamp >= start_time
+        ).group_by(ErrorEntryDB.error_type).all()
+
+        # Нарушения по сервисам
+        violations_by_service = db.query(
+            ErrorEntryDB.service,
+            func.count(ErrorEntryDB.id).label('count')
+        ).filter(
+            ErrorEntryDB.category == "security",
+            ErrorEntryDB.timestamp >= start_time
+        ).group_by(ErrorEntryDB.service).all()
+
+        # Нарушения по часам
+        hourly_violations = db.query(
+            func.date_trunc('hour', ErrorEntryDB.timestamp).label('hour'),
+            func.count(ErrorEntryDB.id).label('count')
+        ).filter(
+            ErrorEntryDB.category == "security",
+            ErrorEntryDB.timestamp >= start_time
+        ).group_by(
+            func.date_trunc('hour', ErrorEntryDB.timestamp)
+        ).order_by('hour').all()
+
+        return {
+            "total_violations": total_violations,
+            "violations_by_type": [
+                {"error_type": v.error_type, "count": v.count}
+                for v in violations_by_type
+            ],
+            "violations_by_service": [
+                {"service": v.service, "count": v.count}
+                for v in violations_by_service
+            ],
+            "hourly_violations": [
+                {"hour": v.hour.isoformat(), "count": v.count}
+                for v in hourly_violations
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get security violations stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get security violations stats: {str(e)}")
+
+
+@app.get("/errors/technical")
+async def get_technical_errors(
+    hours: int = 24,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """Получить технические ошибки"""
+    if not db_initialized:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        start_time = datetime.now() - timedelta(hours=hours)
+
+        # Получаем технические ошибки
+        errors = db.query(ErrorEntryDB).filter(
+            ErrorEntryDB.category == "technical",
+            ErrorEntryDB.timestamp >= start_time
+        ).order_by(ErrorEntryDB.timestamp.desc()).limit(limit).offset(offset).all()
+
+        return [
+            {
+                "id": error.id,
+                "trace_id": error.trace_id,
+                "request_id": error.request_id,
+                "service": error.service,
+                "error_type": error.error_type,
+                "error_message": error.error_message,
+                "stack_trace": error.stack_trace,
+                "context": error.context,
+                "timestamp": error.timestamp,
+                "user_id": error.user_id,
+                "session_id": error.session_id,
+                "created_at": error.created_at
+            }
+            for error in errors
+        ]
+
+    except Exception as e:
+        logger.error(f"Failed to get technical errors: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get technical errors: {str(e)}")
+
+
+@app.get("/errors/stats")
+async def get_errors_stats(
+    hours: int = 24,
+    db: Session = Depends(get_db)
+):
+    """Получить статистику ошибок"""
+    if not db_initialized:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        start_time = datetime.now() - timedelta(hours=hours)
+
+        # Общее количество ошибок
+        total_errors = db.query(ErrorEntryDB).filter(
+            ErrorEntryDB.timestamp >= start_time
+        ).count()
+
+        # Ошибки по категориям
+        errors_by_category = db.query(
+            ErrorEntryDB.category,
+            func.count(ErrorEntryDB.id).label('count')
+        ).filter(
+            ErrorEntryDB.timestamp >= start_time
+        ).group_by(ErrorEntryDB.category).all()
+
+        # Ошибки по типам
+        errors_by_type = db.query(
+            ErrorEntryDB.error_type,
+            func.count(ErrorEntryDB.id).label('count')
+        ).filter(
+            ErrorEntryDB.timestamp >= start_time
+        ).group_by(ErrorEntryDB.error_type).all()
+
+        # Ошибки по сервисам
+        errors_by_service = db.query(
+            ErrorEntryDB.service,
+            func.count(ErrorEntryDB.id).label('count')
+        ).filter(
+            ErrorEntryDB.timestamp >= start_time
+        ).group_by(ErrorEntryDB.service).all()
+
+        return {
+            "total_errors": total_errors,
+            "errors_by_category": [
+                {"category": e.category, "count": e.count}
+                for e in errors_by_category
+            ],
+            "errors_by_type": [
+                {"error_type": e.error_type, "count": e.count}
+                for e in errors_by_type
+            ],
+            "errors_by_service": [
+                {"service": e.service, "count": e.count}
+                for e in errors_by_service
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get errors stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get errors stats: {str(e)}")
+
+
 @app.delete("/logs/cleanup")
 async def cleanup_old_logs(days: int = 30, db: Session = Depends(get_db)):
     """Очистка старых логов"""
@@ -1038,10 +1253,14 @@ async def root():
             "get_full_request_trace": "GET /request/{request_id}/full",
             "create_error": "POST /errors",
             "get_errors": "GET /errors",
+            "get_technical_errors": "GET /errors/technical",
+            "get_errors_stats": "GET /errors/stats",
             "traces_count": "GET /metrics/traces/count",
             "errors_count": "GET /metrics/errors/count",
             "performance": "GET /metrics/performance",
             "services_summary": "GET /metrics/services/summary",
+            "security_violations": "GET /security/violations",
+            "security_violations_stats": "GET /security/violations/stats",
             "system_stats": "GET /stats",
             "health": "GET /health",
             "cleanup": "DELETE /logs/cleanup"

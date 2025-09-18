@@ -1,10 +1,12 @@
 import time
+import uuid
 import logging
+from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 
 from common.config import config
-from common.utils.tracing_middleware import TracingMiddleware, log_error, log_to_monitoring, monitoring_client
+from common.utils.tracing_middleware import TracingMiddleware, log_error, log_info, monitoring_client
 from .models import SecurityCheckRequest, SecurityCheckResponse, SecurityHealthCheckResponse, LogEntry
 from .moderator import LLMModerator
 from .heuristics import is_malicious_prompt
@@ -161,8 +163,8 @@ async def moderate_message(request: SecurityCheckRequest):
 
         # Отправляем лог в мониторинг для важных событий
         log_level = "WARNING" if not response.allowed else "INFO"
-        log_to_monitoring(
-            level=log_level,
+        log_info(
+            #level=log_level,
             service="security-service",
             message=f"Security check: {response.allowed}, confidence={response.confidence:.2f}",
             user_id=request.user_id,
@@ -173,6 +175,59 @@ async def moderate_message(request: SecurityCheckRequest):
                 "processing_time": processing_time
             }
         )
+
+        # Отправляем детальную информацию о нарушениях безопасности в monitoring-service
+        if not response.allowed:
+            # Создаем детальную запись о нарушении безопасности
+            security_violation = {
+                "trace_id": f"security-{int(time.time())}-{uuid.uuid4().hex[:8]}",
+                "request_id": f"req-{int(time.time())}",
+                "service": "security-service",
+                "error_type": "SecurityViolation",
+                "error_message": f"Security violation detected: {response.reason}",
+                "stack_trace": None,
+                "context": {
+                    "user_message": request.message,
+                    "category": response.category,
+                    "confidence": response.confidence,
+                    "processing_time": processing_time,
+                    "heuristic_check": is_malicious,
+                    "llm_available": moderator is not None
+                },
+                "timestamp": datetime.utcnow().isoformat(),
+                "user_id": request.user_id,
+                "session_id": request.session_id,
+                "category": "security"
+            }
+
+            # Отправляем асинхронно с использованием данных из security_violation
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(monitoring_client.report_error(
+                        service=security_violation["service"],
+                        error_type=security_violation["error_type"],
+                        error_message=security_violation["error_message"],
+                        user_id=security_violation["user_id"],
+                        session_id=security_violation["session_id"],
+                        trace_id=security_violation["trace_id"],  # ДОБАВИТЬ trace_id
+                        request_id=security_violation["request_id"],  # ДОБАВИТЬ request_id
+                        context=security_violation["context"]
+                    ))
+                else:
+                    loop.run_until_complete(monitoring_client.report_error(
+                        service=security_violation["service"],
+                        error_type=security_violation["error_type"],
+                        error_message=security_violation["error_message"],
+                        user_id=security_violation["user_id"],
+                        session_id=security_violation["session_id"],
+                        trace_id=security_violation["trace_id"],  # ДОБАВИТЬ trace_id
+                        request_id=security_violation["request_id"],  # ДОБАВИТЬ request_id
+                        context=security_violation["context"]
+                    ))
+            except Exception as monitoring_error:
+                logger.error(f"Failed to send security violation to monitoring: {monitoring_error}")
 
         return response
 

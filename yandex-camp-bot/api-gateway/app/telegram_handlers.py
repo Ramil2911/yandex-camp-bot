@@ -3,6 +3,7 @@ from aiogram import Router, Bot
 from aiogram.types import Message
 from aiogram.filters import Command
 from common.config import config
+from common.utils.tracing_middleware import log_error
 from .models import TelegramMessage, SecurityCheckRequest, DialogueRequest, RAGSearchRequest, LogEntry
 from .client import service_client
 
@@ -54,29 +55,110 @@ async def clear_memory_command(message: Message, bot: Bot):
     session_id = str(message.chat.id)
     username = message.from_user.username or "unknown"
 
-    # Очищаем память в Dialogue Service
     try:
-        dialogue_request = DialogueRequest(
-            message="CLEAR_MEMORY",
+        # Очищаем память через Dialogue Service
+        clear_response = await service_client.clear_memory(session_id, user_id)
+        
+        if clear_response.get("success", False):
+            await service_client.log_event(LogEntry(
+                level="INFO",
+                service="api-gateway",
+                message="User cleared memory",
+                user_id=user_id,
+                session_id=session_id,
+                extra={
+                    "username": username,
+                    "messages_cleared": clear_response.get("messages_cleared", 0)
+                }
+            ))
+
+            await message.reply(f"✅ Память очищена! Удалено сообщений: {clear_response.get('messages_cleared', 0)}")
+        else:
+            await message.reply("❌ Ошибка при очистке памяти. Попробуйте позже.")
+
+    except Exception as e:
+        logger.error(f"Clear memory error: {e}")
+        
+        # Отправляем детальную информацию об ошибке в monitoring-service
+        log_error(
+            service="api-gateway",
+            error_type=type(e).__name__,
+            error_message=f"Clear memory command failed: {str(e)}",
             user_id=user_id,
-            session_id=session_id
+            session_id=session_id,
+            context={
+                "operation": "clear_memory_command",
+                "username": username,
+                "command": "/clear"
+            }
         )
-        await service_client.process_dialogue(dialogue_request)
+        
+        await message.reply("❌ Ошибка при очистке памяти. Попробуйте позже.")
+
+
+@router.message(Command("history"))
+async def history_command(message: Message, bot: Bot):
+    """Обработчик команды /history"""
+    user_id = str(message.from_user.id)
+    session_id = str(message.chat.id)
+    username = message.from_user.username or "unknown"
+
+    try:
+        # Получаем историю диалога
+        history_response = await service_client.get_dialogue_history(session_id, limit=10)
+        
+        if history_response.get("count", 0) == 0:
+            await message.reply("📝 История диалога пуста.")
+            return
+
+        # Формируем сообщение с историей
+        history_text = "📝 **Последние сообщения:**\n\n"
+        
+        for i, msg in enumerate(history_response.get("history", [])[-10:], 1):
+            role_emoji = "👤" if msg.get("role") == "user" else "🤖"
+            content = msg.get("content", "")[:100]  # Ограничиваем длину
+            if len(msg.get("content", "")) > 100:
+                content += "..."
+            
+            history_text += f"{i}. {role_emoji} {content}\n"
+
+        # Добавляем информацию о trace_id последнего сообщения
+        last_message = history_response.get("history", [])[-1] if history_response.get("history") else None
+        if last_message and last_message.get("trace_id"):
+            history_text += f"\n🔍 **Trace ID:** `{last_message['trace_id']}`"
 
         await service_client.log_event(LogEntry(
             level="INFO",
             service="api-gateway",
-            message="User cleared memory",
+            message="User requested history",
             user_id=user_id,
             session_id=session_id,
-            extra={"username": username}
+            extra={
+                "username": username,
+                "history_count": history_response.get("count", 0)
+            }
         ))
 
-        await message.reply(config.bot_messages["memory_cleared"])
+        await message.reply(history_text, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"Clear memory error: {e}")
-        await message.reply(config.bot_messages["error"])
+        logger.error(f"History command error: {e}")
+        
+        # Отправляем детальную информацию об ошибке в monitoring-service
+        log_error(
+            service="api-gateway",
+            error_type=type(e).__name__,
+            error_message=f"History command failed: {str(e)}",
+            user_id=user_id,
+            session_id=session_id,
+            context={
+                "operation": "history_command",
+                "username": username,
+                "command": "/history"
+            }
+        )
+        
+        await message.reply("❌ Ошибка при получении истории. Попробуйте позже.")
 
 
 @router.message()
@@ -171,6 +253,20 @@ async def handle_message(message: Message, bot: Bot):
             session_id=str(message.chat.id) if message.chat else "unknown"
         ))
 
+        # Отправляем детальную информацию об ошибке в monitoring-service
+        log_error(
+            service="api-gateway",
+            error_type=type(e).__name__,
+            error_message=f"Message processing failed: {str(e)}",
+            user_id=str(message.from_user.id) if message.from_user else "unknown",
+            session_id=str(message.chat.id) if message.chat else "unknown",
+            context={
+                "operation": "handle_message",
+                "message_length": len(message.text) if message.text else 0,
+                "username": message.from_user.username if message.from_user else "unknown"
+            }
+        )
+
         await message.reply(config.bot_messages["error"])
 
 
@@ -187,6 +283,20 @@ async def error_handler(exception: Exception, update: Message = None):
         user_id=user_id,
         session_id=session_id
     ))
+
+    # Отправляем детальную информацию об ошибке в monitoring-service
+    log_error(
+        service="api-gateway",
+        error_type=type(exception).__name__,
+        error_message=f"Telegram error: {str(exception)}",
+        user_id=user_id,
+        session_id=session_id,
+        context={
+            "operation": "telegram_error_handler",
+            "update_type": type(update).__name__ if update else "unknown",
+            "has_message": hasattr(update, 'message') if update else False
+        }
+    )
 
     if update:
         await update.reply(config.bot_messages["telegram_error"])

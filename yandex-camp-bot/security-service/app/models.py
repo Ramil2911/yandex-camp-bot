@@ -14,7 +14,7 @@ class ModeratorVerdict(BaseModel):
         description="Final moderation decision for the user prompt"
     )
     categories: Literal[None, 'malware', 'hate', 'self-harm', 'sexual', 'pii', 'jailbreak', 'etc'] = Field(
-        default_factory=list,
+        default=None,
         description="Matched policy categories. Must be None if the decision is 'allow'."
     )
     reason: str = Field(

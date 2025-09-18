@@ -81,6 +81,50 @@ class ServiceClient:
                 session_id=request.session_id
             )
 
+    async def clear_memory(self, session_id: str, user_id: str = "unknown") -> Dict[str, Any]:
+        """Очистка памяти диалога"""
+        try:
+            headers = await self._get_trace_headers(user_id=user_id, session_id=session_id)
+            response = await self.client.post(
+                f"{config.dialogue_service_url}/clear-memory",
+                json={"session_id": session_id, "user_id": user_id},
+                headers=headers
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Clear memory error: {e}")
+            return {"success": False, "message": str(e), "messages_cleared": 0}
+
+    async def get_dialogue_history(self, session_id: str, limit: int = 50) -> Dict[str, Any]:
+        """Получение истории диалога"""
+        try:
+            headers = await self._get_trace_headers(session_id=session_id)
+            response = await self.client.get(
+                f"{config.dialogue_service_url}/dialogue/{session_id}/history",
+                params={"limit": limit},
+                headers=headers
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Get dialogue history error: {e}")
+            return {"session_id": session_id, "history": [], "count": 0}
+
+    async def search_dialogues_by_trace(self, trace_id: str) -> Dict[str, Any]:
+        """Поиск диалогов по trace_id"""
+        try:
+            headers = await self._get_trace_headers()
+            response = await self.client.get(
+                f"{config.dialogue_service_url}/dialogue/trace/{trace_id}",
+                headers=headers
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Search dialogues by trace error: {e}")
+            return {"trace_id": trace_id, "dialogues": [], "count": 0}
+
     async def log_event(self, log_entry: LogEntry):
         """Отправка логов в Monitoring Service"""
         try:

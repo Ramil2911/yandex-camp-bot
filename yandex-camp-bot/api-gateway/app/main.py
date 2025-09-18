@@ -7,7 +7,7 @@ import uvicorn
 import httpx
 
 from common.config import config
-from common.utils.tracing_middleware import TracingMiddleware
+from common.utils.tracing_middleware import TracingMiddleware, log_error
 from .telegram_handlers import router
 from .client import service_client
 from .models import APIGatewayHealthCheckResponse
@@ -43,6 +43,12 @@ async def lifespan(app: FastAPI):
             logger.info("Telegram webhook removed")
         except Exception as e:
             logger.error(f"Failed to remove webhook: {e}")
+            log_error(
+                service="api-gateway",
+                error_type=type(e).__name__,
+                error_message=f"Failed to remove webhook: {str(e)}",
+                context={"operation": "webhook_cleanup", "bot_initialized": True}
+            )
 
         logger.info("Telegram bot initialized")
 
@@ -65,6 +71,12 @@ async def lifespan(app: FastAPI):
             logger.info("Telegram polling stopped")
         except Exception as e:
             logger.error(f"Failed to stop Telegram polling: {e}")
+            log_error(
+                service="api-gateway",
+                error_type=type(e).__name__,
+                error_message=f"Failed to stop Telegram polling: {str(e)}",
+                context={"operation": "polling_shutdown", "bot_initialized": True}
+            )
 
 
 app = FastAPI(

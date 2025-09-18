@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 
 from common.config import config
-from common.utils.tracing_middleware import TracingMiddleware
+from common.utils.tracing_middleware import TracingMiddleware, log_error
 from .models import (
     RAGSearchRequest, RAGSearchResponse, RAGSystemInfo,
     RAGHealthCheckResponse, LogEntry
@@ -32,6 +32,19 @@ async def lifespan(app: FastAPI):
         logger.info("RAG System initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize RAG System: {e}")
+        
+        # Отправляем информацию об ошибке инициализации в monitoring-service
+        log_error(
+            service="rag-service",
+            error_type=type(e).__name__,
+            error_message=f"RAG System initialization failed: {str(e)}",
+            context={
+                "operation": "rag_system_init",
+                "data_directory": config.data_directory,
+                "chroma_db_directory": config.chroma_db_directory
+            }
+        )
+        
         rag_system = None
 
     yield
@@ -65,6 +78,21 @@ async def search_documents(request: RAGSearchRequest):
 
     except Exception as e:
         logger.error(f"Search failed for user {request.user_id}: {str(e)}")
+        
+        # Отправляем детальную информацию об ошибке в monitoring-service
+        log_error(
+            service="rag-service",
+            error_type=type(e).__name__,
+            error_message=f"RAG search failed: {str(e)}",
+            user_id=request.user_id,
+            session_id=request.session_id,
+            context={
+                "operation": "search_documents",
+                "query_length": len(request.query) if request.query else 0,
+                "rag_system_available": rag_system is not None
+            }
+        )
+        
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
@@ -88,6 +116,19 @@ async def reload_documents():
         return {"message": "Documents reloaded successfully"}
     except Exception as e:
         logger.error(f"Document reload failed: {str(e)}")
+        
+        # Отправляем информацию об ошибке в monitoring-service
+        log_error(
+            service="rag-service",
+            error_type=type(e).__name__,
+            error_message=f"Document reload failed: {str(e)}",
+            context={
+                "operation": "reload_documents",
+                "rag_system_available": rag_system is not None,
+                "data_directory": config.data_directory
+            }
+        )
+        
         raise HTTPException(status_code=500, detail=f"Reload failed: {str(e)}")
 
 

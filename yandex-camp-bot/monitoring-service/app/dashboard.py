@@ -1,10 +1,9 @@
 import streamlit as st
 import requests
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
+import socket
 from typing import Dict, List, Any
 
 # Настройки
@@ -101,36 +100,7 @@ def show_full_trace_details(full_trace: Dict[str, Any]):
     else:
         st.warning("Нет данных о пути через сервисы")
 
-    # Timeline визуализация
-    if services_path:
-        st.subheader("⏱️ Timeline выполнения")
-        try:
-            fig = go.Figure()
-
-            for i, service in enumerate(services_path):
-                start_time = service.get("start_time")
-                end_time = service.get("end_time")
-                service_name = service.get("service", f"Service {i}")
-                
-                if start_time and end_time:
-                    fig.add_trace(go.Scatter(
-                        x=[start_time, end_time],
-                        y=[service_name, service_name],
-                        mode='lines+markers',
-                        name=service_name,
-                        line=dict(width=4),
-                        marker=dict(size=8)
-                    ))
-
-            fig.update_layout(
-                title="Временная шкала выполнения запроса",
-                xaxis_title="Время",
-                yaxis_title="Сервис",
-                showlegend=True
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Ошибка при создании timeline: {str(e)}")
+    # Timeline визуализация была удалена для упрощения интерфейса
 
     # Ошибки в трейсе
     errors = full_trace.get("errors", [])
@@ -277,6 +247,202 @@ def show_error_details(errors_data, error_category):
                 show_detailed_error_analysis(selected_error, error_category)
 
 
+def show_detailed_security_violation(violation):
+    """Показать детальный анализ нарушения безопасности"""
+    with st.expander("🔍 Детальный анализ нарушения безопасности", expanded=True):
+        
+        # Основная информация о нарушении
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📋 Основная информация")
+            st.write(f"**🕒 Время:** {violation.get('timestamp', 'N/A')}")
+            st.write(f"**🏢 Сервис:** {violation.get('service', 'N/A')}")
+            st.write(f"**⚠️ Тип нарушения:** {violation.get('error_type', 'N/A')}")
+            st.write(f"**👤 Пользователь:** {violation.get('user_id', 'N/A')}")
+            st.write(f"**🔑 Сессия:** {violation.get('session_id', 'N/A')}")
+        
+        with col2:
+            st.subheader("🔗 Идентификаторы")
+            st.write(f"**🆔 Trace ID:** `{violation.get('trace_id', 'N/A')}`")
+            st.write(f"**📝 Request ID:** `{violation.get('request_id', 'N/A')}`")
+            st.write(f"**🗂️ ID записи:** {violation.get('id', 'N/A')}")
+        
+        # Сообщение о нарушении
+        st.subheader("📄 Сообщение о нарушении")
+        if violation.get('error_message'):
+            message = violation.get('error_message', '')
+            if len(message) > 500:
+                st.text_area("Сообщение о нарушении", message, height=150, disabled=True)
+            else:
+                st.code(message, language="text")
+        else:
+            st.info("Сообщение о нарушении отсутствует")
+        
+        # Контекст нарушения
+        if violation.get('context'):
+            st.subheader("📋 Контекст нарушения")
+            context = violation.get('context', {})
+            
+            # Показываем ключевую информацию из контекста
+            if 'user_message' in context:
+                st.write(f"**💬 Сообщение пользователя:** {context['user_message']}")
+            
+            if 'category' in context:
+                st.write(f"**🏷️ Категория:** {context['category']}")
+            
+            if 'confidence' in context:
+                st.write(f"**🎯 Уровень уверенности:** {context['confidence']:.2f}")
+            
+            if 'processing_time' in context:
+                st.write(f"**⏱️ Время обработки:** {context['processing_time']:.3f}с")
+            
+            if 'heuristic_check' in context:
+                st.write(f"**🔍 Эвристическая проверка:** {'Да' if context['heuristic_check'] else 'Нет'}")
+            
+            if 'llm_available' in context:
+                st.write(f"**🤖 LLM доступен:** {'Да' if context['llm_available'] else 'Нет'}")
+            
+            # Показываем полный контекст в expander
+            with st.expander("📄 Полный контекст"):
+                st.json(context)
+        
+        # Кнопки действий
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if violation.get('trace_id'):
+                if st.button("🔍 Полный трейс", key=f"full_trace_violation_{violation.get('trace_id')}"):
+                    with st.spinner("Загрузка полного трейса..."):
+                        full_trace = get_full_trace(violation.get('trace_id'))
+                        if full_trace:
+                            show_full_trace_details(full_trace)
+                        else:
+                            st.error("Не удалось загрузить данные трейса")
+        
+        with col2:
+            if violation.get('request_id'):
+                if st.button("📋 Все нарушения по Request", key=f"request_violations_{violation.get('request_id')}"):
+                    show_request_related_violations(violation.get('request_id'))
+        
+        with col3:
+            if st.button("📊 Статистика по типу", key=f"violation_type_stats_{violation.get('error_type')}"):
+                show_violation_type_statistics(violation.get('error_type'))
+
+
+def show_request_related_violations(request_id):
+    """Показать все нарушения безопасности связанные с конкретным request_id"""
+    if not request_id:
+        st.error("Request ID не указан")
+        return
+    
+    try:
+        response = requests.get(f"{MONITORING_SERVICE_URL}/security/violations?request_id={request_id}", timeout=5)
+        if response.status_code == 200:
+            related_violations = response.json()
+            if related_violations:
+                st.subheader(f"🔒 Все нарушения безопасности для Request ID: {request_id}")
+                
+                for i, violation in enumerate(related_violations):
+                    with st.expander(f"Нарушение {i+1}: {violation.get('service')} - {violation.get('error_type')}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Время:** {violation.get('timestamp')}")
+                            st.write(f"**Сервис:** {violation.get('service')}")
+                        with col2:
+                            st.write(f"**Тип:** {violation.get('error_type')}")
+                            st.write(f"**Пользователь:** {violation.get('user_id')}")
+                        
+                        st.write(f"**Сообщение:** {violation.get('error_message')}")
+                        
+                        if violation.get('context'):
+                            st.json(violation.get('context'))
+            else:
+                st.info(f"Для Request ID {request_id} не найдено других нарушений безопасности")
+        else:
+            st.error("Не удалось получить данные о нарушениях безопасности")
+    except Exception as e:
+        st.error(f"Ошибка при загрузке данных: {str(e)}")
+
+
+def show_violation_type_statistics(error_type):
+    """Показать статистику по типу нарушения безопасности"""
+    if not error_type:
+        st.error("Тип нарушения не указан")
+        return
+    
+    try:
+        response = requests.get(f"{MONITORING_SERVICE_URL}/security/violations?error_type={error_type}&hours=24", timeout=5)
+        if response.status_code == 200:
+            type_violations = response.json()
+            if type_violations:
+                st.subheader(f"📊 Статистика по типу нарушения: {error_type}")
+                
+                df_stats = pd.DataFrame(type_violations)
+                
+                # Статистика по сервисам
+                if 'service' in df_stats.columns:
+                    service_counts = df_stats['service'].value_counts()
+                    st.write("**Распределение по сервисам:**")
+                    for service, count in service_counts.items():
+                        st.write(f"- {service}: {count} нарушений")
+
+                # Статистика по времени
+                if 'timestamp' in df_stats.columns:
+                    df_stats['hour'] = pd.to_datetime(df_stats['timestamp']).dt.hour
+                    hourly_counts = df_stats['hour'].value_counts().sort_index()
+                    st.write("**Распределение по часам:**")
+                    for hour, count in hourly_counts.items():
+                        st.write(f"- {hour:02d}:00: {count} нарушений")
+                
+                # Общая статистика
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Всего нарушений", len(type_violations))
+                with col2:
+                    st.metric("Затронутых сервисов", df_stats['service'].nunique() if 'service' in df_stats.columns else 0)
+                with col3:
+                    st.metric("Затронутых пользователей", df_stats['user_id'].nunique() if 'user_id' in df_stats.columns else 0)
+                
+                # Анализ контекста
+                if 'context' in df_stats.columns:
+                    st.subheader("📋 Анализ контекста нарушений")
+                    
+                    # Анализ категорий
+                    categories = []
+                    confidences = []
+                    for ctx in df_stats['context']:
+                        if isinstance(ctx, dict):
+                            if 'category' in ctx:
+                                categories.append(ctx['category'])
+                            if 'confidence' in ctx:
+                                confidences.append(ctx['confidence'])
+                    
+                    if categories:
+                        category_counts = pd.Series(categories).value_counts()
+                        st.write("**Распределение по категориям:**")
+                        for category, count in category_counts.items():
+                            st.write(f"- {category}: {count} нарушений")
+                    
+                    if confidences:
+                        st.write("**Статистика по уровню уверенности:**")
+                        conf_series = pd.Series(confidences)
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Средний уровень", f"{conf_series.mean():.2f}")
+                        with col2:
+                            st.metric("Минимальный уровень", f"{conf_series.min():.2f}")
+                        with col3:
+                            st.metric("Максимальный уровень", f"{conf_series.max():.2f}")
+                
+            else:
+                st.info(f"За последние 24 часа не найдено нарушений типа {error_type}")
+        else:
+            st.error("Не удалось получить данные статистики")
+    except Exception as e:
+        st.error(f"Ошибка при загрузке статистики: {str(e)}")
+
+
 def show_detailed_error_analysis(error, error_category):
     """Показать подробный анализ выбранной ошибки"""
     with st.expander("🔍 Детальный анализ ошибки", expanded=True):
@@ -402,14 +568,16 @@ def show_error_type_statistics(error_type):
                 if 'service' in df_stats.columns:
                     service_counts = df_stats['service'].value_counts()
                     st.write("**Распределение по сервисам:**")
-                    st.bar_chart(service_counts)
+                    for service, count in service_counts.items():
+                        st.write(f"- {service}: {count} ошибок")
 
                 # Статистика по времени
                 if 'timestamp' in df_stats.columns:
                     df_stats['hour'] = pd.to_datetime(df_stats['timestamp']).dt.hour
                     hourly_counts = df_stats['hour'].value_counts().sort_index()
                     st.write("**Распределение по часам:**")
-                    st.bar_chart(hourly_counts)
+                    for hour, count in hourly_counts.items():
+                        st.write(f"- {hour:02d}:00: {count} ошибок")
 
                 # Общая статистика
                 col1, col2, col3 = st.columns(3)
@@ -454,24 +622,27 @@ def show_error_statistics(all_errors):
     with col4:
         st.metric("Затронутых пользователей", df_errors['user_id'].nunique() if 'user_id' in df_errors.columns else 0)
 
-    # График распределения ошибок по типам
+    # Распределение ошибок по типам
     if 'error_type' in df_errors.columns:
         st.subheader("📈 Распределение по типам ошибок")
         error_type_counts = df_errors['error_type'].value_counts()
-        st.bar_chart(error_type_counts)
+        for error_type, count in error_type_counts.items():
+            st.write(f"- {error_type}: {count} случаев")
 
-    # График распределения ошибок по сервисам
+    # Распределение ошибок по сервисам
     if 'service' in df_errors.columns:
         st.subheader("🏢 Распределение по сервисам")
         service_counts = df_errors['service'].value_counts()
-        st.bar_chart(service_counts)
+        for service, count in service_counts.items():
+            st.write(f"- {service}: {count} ошибок")
 
-    # График ошибок по времени
+    # Распределение ошибок по времени
     if 'timestamp' in df_errors.columns:
         st.subheader("⏰ Распределение по времени")
         df_errors['hour'] = pd.to_datetime(df_errors['timestamp']).dt.hour
         hourly_counts = df_errors['hour'].value_counts().sort_index()
-        st.bar_chart(hourly_counts)
+        for hour, count in hourly_counts.items():
+            st.write(f"- {hour:02d}:00: {count} ошибок")
 
     # Топ проблемных сервисов
     if 'service' in df_errors.columns and 'error_type' in df_errors.columns:
@@ -499,7 +670,8 @@ def get_stats() -> Dict[str, Any]:
         if response.status_code == 200:
             return response.json()
         return {}
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении статистики: {str(e)}")
         return {}
 
 @st.cache_data(ttl=REFRESH_INTERVAL)
@@ -510,7 +682,8 @@ def get_traces_count(hours: int = 24) -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
 
 @st.cache_data(ttl=REFRESH_INTERVAL)
@@ -521,7 +694,8 @@ def get_errors_count(hours: int = 24) -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
 
 
@@ -536,7 +710,8 @@ def get_errors_count_by_category(hours: int = 24) -> Dict[str, List[Dict[str, An
             "security": security_response.json() if security_response.status_code == 200 else [],
             "technical": technical_response.json() if technical_response.status_code == 200 else []
         }
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении статистики по категориям: {str(e)}")
         return {"security": [], "technical": []}
 
 @st.cache_data(ttl=REFRESH_INTERVAL)
@@ -547,7 +722,8 @@ def get_performance_data(hours: int = 24) -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
 
 @st.cache_data(ttl=REFRESH_INTERVAL)
@@ -558,7 +734,8 @@ def get_services_summary(hours: int = 24) -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
 
 @st.cache_data(ttl=REFRESH_INTERVAL)
@@ -569,7 +746,8 @@ def get_recent_traces(limit: int = 10) -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
 
 @st.cache_data(ttl=REFRESH_INTERVAL)
@@ -580,19 +758,45 @@ def get_recent_errors(limit: int = 10) -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
 
 
 @st.cache_data(ttl=REFRESH_INTERVAL)
+def get_security_violations(limit: int = 10) -> List[Dict[str, Any]]:
+    """Получить нарушения безопасности"""
+    try:
+        response = requests.get(f"{MONITORING_SERVICE_URL}/security/violations?limit={limit}", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return []
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
+        return []
+
+@st.cache_data(ttl=REFRESH_INTERVAL)
+def get_security_violations_stats(hours: int = 24) -> Dict[str, Any]:
+    """Получить статистику нарушений безопасности"""
+    try:
+        response = requests.get(f"{MONITORING_SERVICE_URL}/security/violations/stats?hours={hours}", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return {}
+    except Exception as e:
+        st.error(f"Ошибка при получении статистики: {str(e)}")
+        return {}
+
+@st.cache_data(ttl=REFRESH_INTERVAL)
 def get_security_errors(limit: int = 10) -> List[Dict[str, Any]]:
-    """Получить последние security ошибки"""
+    """Получить последние security ошибки (legacy)"""
     try:
         response = requests.get(f"{MONITORING_SERVICE_URL}/errors?category=security&limit={limit}", timeout=5)
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
 
 
@@ -600,12 +804,25 @@ def get_security_errors(limit: int = 10) -> List[Dict[str, Any]]:
 def get_technical_errors(limit: int = 10) -> List[Dict[str, Any]]:
     """Получить последние технические ошибки"""
     try:
-        response = requests.get(f"{MONITORING_SERVICE_URL}/errors?category=technical&limit={limit}", timeout=5)
+        response = requests.get(f"{MONITORING_SERVICE_URL}/errors/technical?limit={limit}", timeout=5)
         if response.status_code == 200:
             return response.json()
         return []
-    except:
+    except Exception as e:
+        st.error(f"Ошибка при получении данных: {str(e)}")
         return []
+
+@st.cache_data(ttl=REFRESH_INTERVAL)
+def get_errors_stats(hours: int = 24) -> Dict[str, Any]:
+    """Получить статистику ошибок"""
+    try:
+        response = requests.get(f"{MONITORING_SERVICE_URL}/errors/stats?hours={hours}", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return {}
+    except Exception as e:
+        st.error(f"Ошибка при получении статистики: {str(e)}")
+        return {}
 
 
 def get_full_trace(trace_id: str) -> Dict[str, Any]:
@@ -624,7 +841,7 @@ def get_full_trace(trace_id: str) -> Dict[str, Any]:
             try:
                 error_detail = response.json()
                 st.error(f"Детали ошибки: {error_detail}")
-            except:
+            except Exception as e:
                 st.error(f"Текст ответа: {response.text}")
             return {}
     except requests.exceptions.Timeout:
@@ -656,7 +873,6 @@ def get_services_health() -> List[Dict[str, Any]]:
         try:
             if service["type"] == "tcp":
                 # Для TCP сервисов (Redis, PostgreSQL) используем socket check
-                import socket
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(2)
                 start_time = time.time()
@@ -726,8 +942,11 @@ def main():
     services_data = get_services_summary(hours)
     # recent_errors уже загружен глобально
     recent_traces = get_recent_traces()
+    security_violations = get_security_violations()
+    security_violations_stats = get_security_violations_stats(hours)
     security_errors = get_security_errors()
     technical_errors = get_technical_errors()
+    errors_stats = get_errors_stats(hours)
     services_health = get_services_health()
 
     # Быстрый поиск и фильтры
@@ -823,6 +1042,69 @@ def main():
 
     st.divider()
 
+    # Секция нарушений безопасности
+    st.subheader("🔒 Нарушения безопасности")
+    
+    if security_violations_stats:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Всего нарушений", security_violations_stats.get('total_violations', 0))
+        
+        with col2:
+            violations_by_type = security_violations_stats.get('violations_by_type', [])
+            st.metric("Типов нарушений", len(violations_by_type))
+        
+        with col3:
+            violations_by_service = security_violations_stats.get('violations_by_service', [])
+            st.metric("Затронутых сервисов", len(violations_by_service))
+        
+        with col4:
+            hourly_violations = security_violations_stats.get('hourly_violations', [])
+            recent_violations = len([v for v in hourly_violations if v.get('count', 0) > 0])
+            st.metric("Активных часов", recent_violations)
+    
+    # Детальная информация о нарушениях безопасности
+    if security_violations:
+        st.subheader("🚨 Последние нарушения безопасности")
+        
+        df_violations = pd.DataFrame(security_violations)
+        if not df_violations.empty:
+            # Показываем таблицу нарушений
+            display_cols = ['timestamp', 'service', 'error_type', 'error_message', 'user_id', 'session_id']
+            available_cols = [col for col in display_cols if col in df_violations.columns]
+            
+            if available_cols:
+                st.dataframe(
+                    df_violations[available_cols].head(10),
+                    use_container_width=True,
+                    column_config={
+                        "timestamp": st.column_config.DatetimeColumn("Время", format="DD.MM.YYYY HH:mm:ss"),
+                        "service": "Сервис",
+                        "error_type": "Тип нарушения",
+                        "error_message": st.column_config.TextColumn("Сообщение", width="large"),
+                        "user_id": "Пользователь",
+                        "session_id": "Сессия",
+                    }
+                )
+            
+            # Детальный анализ нарушений
+            if len(df_violations) > 0:
+                selected_violation_idx = st.selectbox(
+                    "Выберите нарушение для детального анализа:",
+                    range(len(df_violations.head(10))),
+                    format_func=lambda x: f"{df_violations.iloc[x]['service']} - {df_violations.iloc[x]['error_type']} - {df_violations.iloc[x]['error_message'][:50]}...",
+                    key="security_violation_select"
+                )
+                
+                if selected_violation_idx is not None:
+                    selected_violation = df_violations.iloc[selected_violation_idx]
+                    show_detailed_security_violation(selected_violation)
+    else:
+        st.info("Нарушений безопасности не обнаружено")
+
+    st.divider()
+
     # Панель Health Check всех сервисов
     st.subheader("🔍 Статус сервисов")
 
@@ -875,11 +1157,11 @@ def main():
 
         with col4:
             error_rate = stats.get('error_rate_24h', 0)
-            st.metric("Ошибка (%) за 24ч", ".1f")
+            st.metric("Ошибка (%) за 24ч", f"{error_rate:.1f}")
 
         with col5:
             response_time = stats.get('avg_response_time', 0)
-            st.metric("Среднее время ответа", ".2f")
+            st.metric("Среднее время ответа", f"{response_time:.2f}")
 
     # Дополнительные метрики ошибок
     if recent_errors:
@@ -912,6 +1194,11 @@ def main():
 
         # Фильтры для анализа ошибок
         col1, col2, col3 = st.columns(3)
+
+        # Инициализируем переменные по умолчанию
+        selected_service = "Все"
+        selected_error_type = "Все"
+        selected_category = "Все"
 
         with col1:
             if 'service' in df_errors.columns:
@@ -988,67 +1275,97 @@ def main():
             if not df_traces.empty:
                 # Группировка по сервису и статусу
                 if 'service' in df_traces.columns and 'status' in df_traces.columns:
-                    fig = px.bar(
-                        df_traces,
-                        x='service',
-                        y='count',
-                        color='status',
-                        title="Запросы по сервисам",
-                        barmode='stack'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.write("**Запросы по сервисам:**")
+                    service_status = df_traces.groupby(['service', 'status'])['count'].sum().reset_index()
+                    for _, row in service_status.iterrows():
+                        st.write(f"- {row['service']} ({row['status']}): {row['count']} запросов")
                 else:
-                    st.info("Недостаточно данных для отображения графика запросов")
+                    st.info("Недостаточно данных для отображения статистики запросов")
             else:
                 st.info("Нет данных о запросах")
         else:
             st.info("Не удалось загрузить данные о запросах")
 
     with col2:
-        st.subheader("🚨 Количество ошибок по категориям")
+        st.subheader("🚨 Анализ ошибок и нарушений")
 
         # Создаем вкладки для разных типов ошибок
-        tab1, tab2 = st.tabs(["🔒 Security Alerts", "⚙️ Технические ошибки"])
+        tab1, tab2, tab3 = st.tabs(["🔒 Нарушения безопасности", "⚙️ Технические ошибки", "📊 Общая статистика"])
 
         with tab1:
-            if errors_by_category["security"]:
-                df_security = pd.DataFrame(errors_by_category["security"])
-                if not df_security.empty:
-                    if 'service' in df_security.columns and 'count' in df_security.columns:
-                        fig = px.bar(
-                            df_security,
-                            x='service',
-                            y='count',
-                            color='error_type',
-                            title="Security ошибки по сервисам"
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("Недостаточно данных для отображения графика security ошибок")
-                else:
-                    st.info("Нет данных о security ошибках")
+            if security_violations_stats:
+                st.write("**Статистика нарушений безопасности:**")
+                
+                # Статистика нарушений по типам
+                violations_by_type = security_violations_stats.get('violations_by_type', [])
+                if violations_by_type:
+                    st.write("**Нарушения безопасности по типам:**")
+                    for violation in violations_by_type:
+                        st.write(f"- {violation.get('error_type', 'Неизвестно')}: {violation.get('count', 0)} случаев")
+
+                # Статистика нарушений по сервисам
+                violations_by_service = security_violations_stats.get('violations_by_service', [])
+                if violations_by_service:
+                    st.write("**Распределение нарушений по сервисам:**")
+                    for violation in violations_by_service:
+                        st.write(f"- {violation.get('service', 'Неизвестно')}: {violation.get('count', 0)} нарушений")
+
+                # Статистика нарушений по времени
+                hourly_violations = security_violations_stats.get('hourly_violations', [])
+                if hourly_violations:
+                    st.write("**Нарушения безопасности по часам:**")
+                    for violation in hourly_violations:
+                        hour = pd.to_datetime(violation.get('hour', '')).hour if violation.get('hour') else 'Н/Д'
+                        count = violation.get('count', 0)
+                        st.write(f"- {hour:02d}:00: {count} нарушений")
             else:
-                st.info("Не удалось загрузить данные о security ошибках")
+                st.info("Нет данных о нарушениях безопасности")
 
         with tab2:
-            if errors_by_category["technical"]:
-                df_technical = pd.DataFrame(errors_by_category["technical"])
-                if not df_technical.empty:
-                    if 'service' in df_technical.columns and 'count' in df_technical.columns:
-                        fig = px.bar(
-                            df_technical,
-                            x='service',
-                            y='count',
-                            color='error_type',
-                            title="Технические ошибки по сервисам"
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("Недостаточно данных для отображения графика технических ошибок")
-                else:
-                    st.info("Нет данных о технических ошибках")
+            if errors_stats:
+                st.write("**Статистика технических ошибок:**")
+                
+                # Статистика ошибок по типам
+                errors_by_type = errors_stats.get('errors_by_type', [])
+                if errors_by_type:
+                    st.write("**Технические ошибки по типам:**")
+                    for error in errors_by_type:
+                        st.write(f"- {error.get('error_type', 'Неизвестно')}: {error.get('count', 0)} случаев")
+
+                # Статистика ошибок по сервисам
+                errors_by_service = errors_stats.get('errors_by_service', [])
+                if errors_by_service:
+                    st.write("**Распределение технических ошибок по сервисам:**")
+                    for error in errors_by_service:
+                        st.write(f"- {error.get('service', 'Неизвестно')}: {error.get('count', 0)} ошибок")
             else:
-                st.info("Не удалось загрузить данные о технических ошибках")
+                st.info("Нет данных о технических ошибках")
+
+        with tab3:
+            if errors_stats:
+                st.write("**Общая статистика ошибок:**")
+                
+                # Общие метрики
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Всего ошибок", errors_stats.get('total_errors', 0))
+                
+                with col2:
+                    errors_by_category = errors_stats.get('errors_by_category', [])
+                    security_count = sum(item['count'] for item in errors_by_category if item.get('category') == 'security')
+                    st.metric("Security ошибок", security_count)
+                
+                with col3:
+                    technical_count = sum(item['count'] for item in errors_by_category if item.get('category') == 'technical')
+                    st.metric("Технических ошибок", technical_count)
+                
+                # Распределение по категориям
+                if errors_by_category:
+                    st.write("**Распределение ошибок по категориям:**")
+                    for category in errors_by_category:
+                        st.write(f"- {category.get('category', 'Неизвестно')}: {category.get('count', 0)} ошибок")
+            else:
+                st.info("Нет данных для общей статистики")
 
     # Производительность
     st.subheader("⚡ Производительность по сервисам")
@@ -1060,25 +1377,17 @@ def main():
 
             with col1:
                 if 'service' in df_perf.columns and 'avg_response_time' in df_perf.columns:
-                    fig = px.bar(
-                        df_perf,
-                        x='service',
-                        y='avg_response_time',
-                        title="Среднее время ответа (мс)"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.write("**Среднее время ответа по сервисам:**")
+                    for _, row in df_perf.iterrows():
+                        st.write(f"- {row['service']}: {row.get('avg_response_time', 0):.2f} мс")
                 else:
                     st.info("Недостаточно данных о времени ответа")
 
             with col2:
                 if 'service' in df_perf.columns and 'request_count' in df_perf.columns:
-                    fig = px.pie(
-                        df_perf,
-                        values='request_count',
-                        names='service',
-                        title="Распределение запросов по сервисам"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.write("**Распределение запросов по сервисам:**")
+                    for _, row in df_perf.iterrows():
+                        st.write(f"- {row['service']}: {row.get('request_count', 0)} запросов")
                 else:
                     st.info("Недостаточно данных о распределении запросов")
         else:
@@ -1141,20 +1450,14 @@ def main():
                     }
                 )
 
-                # График топ проблемных сервисов
+                # Топ проблемных сервисов
                 if len(df_extended_services) > 0:
                     st.subheader("🔥 Топ сервисов по количеству ошибок")
                     top_problematic = df_extended_services.head(10)
 
-                    fig = px.bar(
-                        top_problematic,
-                        x='service',
-                        y='total_errors',
-                        color='error_rate',
-                        title="Распределение ошибок по сервисам",
-                        labels={'total_errors': 'Количество ошибок', 'error_rate': 'Процент ошибок'}
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.write("**Топ проблемных сервисов:**")
+                    for _, row in top_problematic.iterrows():
+                        st.write(f"- {row['service']}: {row['total_errors']} ошибок ({row['error_rate']:.1f}%)")
 
             else:
                 # Показываем базовую сводку если нет данных об ошибках
@@ -1210,15 +1513,18 @@ def main():
         st.subheader("⚠️ Анализ ошибок")
 
         # Вкладки для разных типов ошибок
-        error_tab1, error_tab2, error_tab3 = st.tabs(["🔒 Security", "⚙️ Технические", "📊 Статистика"])
+        error_tab1, error_tab2, error_tab3, error_tab4 = st.tabs(["🔒 Нарушения безопасности", "⚙️ Технические ошибки", "🔒 Security ошибки", "📊 Статистика"])
 
         with error_tab1:
-            show_error_details(security_errors, "security")
+            show_error_details(security_violations, "нарушения безопасности")
 
         with error_tab2:
             show_error_details(technical_errors, "technical")
 
         with error_tab3:
+            show_error_details(security_errors, "security")
+
+        with error_tab4:
             show_error_statistics(recent_errors)
 
     # Информация о системе
@@ -1243,7 +1549,7 @@ def main():
         time.sleep(REFRESH_INTERVAL)
         st.rerun()
 
-# Загружаем данные после определения всех функций
+# Загружаем данные в начале для корректной работы
 @st.cache_data(ttl=30)
 def load_dashboard_data():
     """Загружаем все необходимые данные для dashboard"""
