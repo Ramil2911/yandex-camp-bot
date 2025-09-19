@@ -9,7 +9,7 @@ on:
       filter:
         source_branches: [""]
         target_branches: ["master"]
-        paths: ["yandex-camp-bot/rag-service/**"]
+        paths: ["rag-service/**"]
 
   push:
     - workflows: [deploy-all-services, deploy-rag-service]
@@ -19,7 +19,7 @@ on:
     - workflows: [deploy-rag-service]
       filter:
         branches: ["master"]
-        paths: ["yandex-camp-bot/rag-service/**"]
+        paths: ["rag-service/**"]
 
 workflows:
   deploy-all-services:
@@ -61,15 +61,13 @@ tasks:
             
             for service in "${services[@]}"; do
               echo "Deploying $service..."
-              ssh $SSH_USER@$SSH_HOST << EOF
-                cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
-                docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile .
-                docker push cr.yandex/$REGISTRY_ID/$service:latest
+              ssh $SSH_USER@$SSH_HOST "cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
+                docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile . && \
+                docker push cr.yandex/$REGISTRY_ID/$service:latest && \
                 yc serverless container revision deploy \
                   --container-name $service \
                   --image cr.yandex/$REGISTRY_ID/$service:latest \
-                  --service-account-id $SERVICE_ACCOUNT_ID
-              EOF
+                  --service-account-id $SERVICE_ACCOUNT_ID"
               echo "Finished deploying $service"
             done
             
@@ -86,13 +84,11 @@ tasks:
         script: 
           - |
             echo "Deploying rag-service..."
-            ssh $SSH_USER@$SSH_HOST << EOF
-              cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
-              docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile .
-              docker push cr.yandex/$REGISTRY_ID/rag-service:latest
+            ssh $SSH_USER@$SSH_HOST "cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
+              docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile . && \
+              docker push cr.yandex/$REGISTRY_ID/rag-service:latest && \
               yc serverless container revision deploy \
                 --container-name rag-service \
                 --image cr.yandex/$REGISTRY_ID/rag-service:latest \
-                --service-account-id $SERVICE_ACCOUNT_ID
-            EOF
+                --service-account-id $SERVICE_ACCOUNT_ID"
             echo "Finished deploying rag-service"
