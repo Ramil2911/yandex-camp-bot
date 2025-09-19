@@ -2,7 +2,7 @@
 """
 Скрипт для запуска Streamlit дашборда мониторинга
 """
-#test_ci
+
 import subprocess
 import sys
 import os
