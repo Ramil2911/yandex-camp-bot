@@ -9,3 +9,6 @@ from common.models import (
 # HealthCheckResponse наследуется от общего и расширяется специфичными полями
 class SecurityHealthCheckResponse(HealthCheckResponse):
     llm_status: str
+
+
+#test_ci
