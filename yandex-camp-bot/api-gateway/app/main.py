@@ -1,119 +1,137 @@
 import logging
 import asyncio
-from contextlib import asynccontextmanager
+import time
 from fastapi import FastAPI, HTTPException, Request
 from aiogram import Bot, Dispatcher
-import uvicorn
-import httpx
 
 from common.config import config
 from common.utils.tracing_middleware import TracingMiddleware, log_error
+from common.utils import BaseService
 from .telegram_handlers import router
 from .client import service_client
 from .models import APIGatewayHealthCheckResponse
-
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
 
 # Глобальные переменные для Telegram бота
 bot = None
 dispatcher = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Управление жизненным циклом приложения"""
-    global bot, dispatcher
+class APIGatewayService(BaseService):
+    """API Gateway Service с использованием базового класса"""
 
-    logger.info("Starting API Gateway...")
+    def __init__(self):
+        super().__init__(
+            service_name="api-gateway",
+            version="1.0.0",
+            description="Входная точка для Telegram бота с маршрутизацией в микросервисы",
+            dependencies={
+                "telegram": "available",
+                "security_service": "available",
+                "rag_service": "available",
+                "dialogue_service": "available",
+                "monitoring_service": "available"
+            }
+        )
 
-    # Инициализация Telegram бота
-    if config.telegram_token:
-        bot = Bot(token=config.telegram_token)
-        dispatcher = Dispatcher()
-        dispatcher.include_router(router)
+    async def on_startup(self):
+        """Инициализация Telegram бота"""
+        global bot, dispatcher
 
-        # Удаляем webhook (на всякий случай)
-        try:
-            await bot.delete_webhook()
-            logger.info("Telegram webhook removed")
-        except Exception as e:
-            logger.error(f"Failed to remove webhook: {e}")
-            log_error(
-                service="api-gateway",
-                error_type=type(e).__name__,
-                error_message=f"Failed to remove webhook: {str(e)}",
-                context={"operation": "webhook_cleanup", "bot_initialized": True}
-            )
+        # Инициализация Telegram бота
+        if config.telegram_token:
+            bot = Bot(token=config.telegram_token)
+            dispatcher = Dispatcher()
+            dispatcher.include_router(router)
 
-        logger.info("Telegram bot initialized")
+            # Удаляем webhook (на всякий случай)
+            try:
+                await bot.delete_webhook()
+                self.logger.info("Telegram webhook removed")
+            except Exception as e:
+                self.logger.error(f"Failed to remove webhook: {e}")
+                self.handle_error_response(
+                    error=e,
+                    context={"operation": "webhook_cleanup", "bot_initialized": True}
+                )
 
-        # Запускаем polling в фоне
-        polling_task = asyncio.create_task(dispatcher.start_polling(bot))
-        logger.info("Telegram polling started")
+            self.logger.info("Telegram bot initialized")
 
-    else:
-        logger.warning("TELEGRAM_TOKEN not provided, Telegram bot disabled")
+            # Запускаем polling в фоне
+            polling_task = asyncio.create_task(dispatcher.start_polling(bot))
+            self.logger.info("Telegram polling started")
 
-    yield
+        else:
+            self.logger.warning("TELEGRAM_TOKEN not provided, Telegram bot disabled")
 
-    # Очистка ресурсов
-    logger.info("Shutting down API Gateway...")
-    await service_client.close()
-    if bot and dispatcher:
-        try:
-            logger.info("Stopping Telegram polling...")
-            await dispatcher.stop_polling()
-            logger.info("Telegram polling stopped")
-        except Exception as e:
-            logger.error(f"Failed to stop Telegram polling: {e}")
-            log_error(
-                service="api-gateway",
-                error_type=type(e).__name__,
-                error_message=f"Failed to stop Telegram polling: {str(e)}",
-                context={"operation": "polling_shutdown", "bot_initialized": True}
-            )
+    async def on_shutdown(self):
+        """Очистка ресурсов"""
+        await service_client.close()
+        if bot and dispatcher:
+            try:
+                self.logger.info("Stopping Telegram polling...")
+                await dispatcher.stop_polling()
+                self.logger.info("Telegram polling stopped")
+            except Exception as e:
+                self.logger.error(f"Failed to stop Telegram polling: {e}")
+                self.handle_error_response(
+                    error=e,
+                    context={"operation": "polling_shutdown", "bot_initialized": True}
+                )
 
+    async def check_dependencies(self):
+        """Проверка зависимостей API Gateway"""
+        dependencies_status = {}
 
-app = FastAPI(
-    title="API Gateway Service",
-    description="Входная точка для Telegram бота с маршрутизацией в микросервисы",
-    version="1.0.0",
-    lifespan=lifespan
-)
+        # Проверяем Telegram бота
+        if bot:
+            try:
+                me = await bot.get_me()
+                dependencies_status["telegram"] = "polling_active" if me else "running"
+            except Exception:
+                dependencies_status["telegram"] = "running"
+        else:
+            dependencies_status["telegram"] = "disabled"
 
-# Добавляем middleware для трейсинга
-app.middleware("http")(TracingMiddleware("api-gateway"))
-
-
-@app.get("/health")
-async def health_check():
-    """Проверка здоровья сервиса"""
-    telegram_status = "disabled"
-    if bot:
-        try:
-            # Проверяем, что бот инициализирован
-            me = await bot.get_me()
-            telegram_status = "polling_active" if me else "running"
-        except Exception:
-            telegram_status = "running"
-
-    return APIGatewayHealthCheckResponse(
-        status="healthy",
-        service="api-gateway",
-        timestamp="2024-01-01T00:00:00Z",  # В реальном проекте использовать datetime
-        dependencies={
-            "telegram": telegram_status,
-            "security_service": "available",  # В реальном проекте проверять доступность
+        # Остальные сервисы пока считаем доступными
+        dependencies_status.update({
+            "security_service": "available",
             "rag_service": "available",
             "dialogue_service": "available",
             "monitoring_service": "available"
-        }
-    )
+        })
+
+        return dependencies_status
+
+    def create_health_response(self, status: str, service_status: str = None, additional_stats: dict = None):
+        """Создание health check ответа для API Gateway"""
+        telegram_status = "disabled"
+        if bot:
+            try:
+                # Проверяем, что бот инициализирован
+                # В асинхронном контексте мы не можем вызвать bot.get_me() синхронно
+                telegram_status = "polling_active"
+            except Exception:
+                telegram_status = "running"
+
+        return APIGatewayHealthCheckResponse(
+            status=status,
+            service=self.service_name,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            dependencies={
+                "telegram": telegram_status,
+                "security_service": "available",
+                "rag_service": "available",
+                "dialogue_service": "available",
+                "monitoring_service": "available"
+            }
+        )
+
+
+# Создаем экземпляр сервиса
+service = APIGatewayService()
+app = service.app
+
+
 
 
 @app.get("/webhook-info")
@@ -139,20 +157,6 @@ async def webhook_info():
         return {"error": str(e)}
 
 
-@app.get("/")
-async def root():
-    """Информационная страница"""
-    return {
-        "service": "API Gateway",
-        "version": "1.0.0",
-        "description": "Входная точка микросервисной архитектуры Telegram бота (aiogram polling режим)",
-        "endpoints": {
-            "health": "/health",
-            "webhook_info": "/webhook-info"
-        },
-        "mode": "polling",
-        "library": "aiogram"
-    }
 
 
 if __name__ == "__main__":

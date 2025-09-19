@@ -3,102 +3,102 @@ import uuid
 import logging
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
-from contextlib import asynccontextmanager
 
 from common.config import config
 from common.utils.tracing_middleware import TracingMiddleware, log_error, log_info, monitoring_client
+from common.utils import BaseService
 from .models import SecurityCheckRequest, SecurityCheckResponse, SecurityHealthCheckResponse, LogEntry
 from .moderator import LLMModerator
 from .heuristics import is_malicious_prompt
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Глобальные переменные
 moderator = None
 
 
+class SecurityService(BaseService):
+    """Security Service с использованием базового класса"""
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Управление жизненным циклом приложения"""
-    global moderator
-
-    logger.info("Starting Security Service...")
-
-    # Инициализация модератора
-    try:
-        # Проверяем наличие необходимых переменных окружения
-        if not config.yc_folder_id or not config.yc_folder_id.strip():
-            logger.error("YC_FOLDER_ID environment variable is not set or empty")
-            raise ValueError("YC_FOLDER_ID is required")
-
-        if not config.yc_openai_token or not config.yc_openai_token.strip():
-            logger.error("YC_OPENAI_TOKEN environment variable is not set or empty")
-            raise ValueError("YC_OPENAI_TOKEN is required")
-
-        moderator = LLMModerator(
-            folder_id=config.yc_folder_id.strip(),
-            openai_api_key=config.yc_openai_token.strip()
+    def __init__(self):
+        super().__init__(
+            service_name="security-service",
+            version="1.0.0",
+            description="Сервис модерации и безопасности для проверки пользовательских запросов",
+            dependencies={"llm": "available"}
         )
-        logger.info("LLM Moderator initialized successfully")
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        logger.error("LLM Moderator will not be available. Service will work with heuristics only.")
-        
-        # Отправляем ошибку в мониторинг синхронно
+
+    async def on_startup(self):
+        """Инициализация модератора"""
+        global moderator
+
         try:
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(monitoring_client.report_error(
-                service="security-service",
-                error_type="ConfigurationError",
-                error_message=str(e),
+            # Проверяем наличие необходимых переменных окружения
+            if not config.yc_folder_id or not config.yc_folder_id.strip():
+                raise ValueError("YC_FOLDER_ID is required")
+
+            if not config.yc_openai_token or not config.yc_openai_token.strip():
+                raise ValueError("YC_OPENAI_TOKEN is required")
+
+            moderator = LLMModerator(
+                folder_id=config.yc_folder_id.strip(),
+                openai_api_key=config.yc_openai_token.strip()
+            )
+            logger.info("LLM Moderator initialized successfully")
+
+        except ValueError as e:
+            logger.error(f"Configuration error: {e}")
+            logger.error("LLM Moderator will not be available. Service will work with heuristics only.")
+
+            # Отправляем ошибку в мониторинг
+            self.handle_error_response(
+                error=e,
                 context={"component": "LLMModerator", "error": "Configuration validation failed"}
-            ))
-            loop.close()
-        except Exception as monitoring_error:
-            logger.error(f"Failed to send error to monitoring: {monitoring_error}")
-        
-        moderator = None
-    except Exception as e:
-        logger.error(f"Failed to initialize LLM Moderator: {e}")
-        logger.error("LLM Moderator will not be available. Service will work with heuristics only.")
-        
-        # Отправляем ошибку в мониторинг синхронно
-        try:
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(monitoring_client.report_error(
-                service="security-service",
-                error_type="InitializationError",
-                error_message=str(e),
+            )
+            moderator = None
+
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM Moderator: {e}")
+            logger.error("LLM Moderator will not be available. Service will work with heuristics only.")
+
+            # Отправляем ошибку в мониторинг
+            self.handle_error_response(
+                error=e,
                 context={"component": "LLMModerator", "error": "LLM initialization failed"}
-            ))
-            loop.close()
-        except Exception as monitoring_error:
-            logger.error(f"Failed to send error to monitoring: {monitoring_error}")
-        
-        moderator = None
+            )
+            moderator = None
 
-    yield
+    async def on_shutdown(self):
+        """Очистка ресурсов"""
+        global moderator
+        if moderator:
+            # Здесь можно добавить очистку ресурсов moderator
+            pass
 
-    logger.info("Shutting down Security Service...")
+    async def check_dependencies(self):
+        """Проверка зависимостей security service"""
+        dependencies_status = {}
+        dependencies_status["llm"] = "available" if moderator else "unavailable"
+        return dependencies_status
+
+    def create_health_response(self, status: str, service_status: str = None, additional_stats: dict = None):
+        """Создание health check ответа для security service"""
+        llm_status = "available" if moderator else "unavailable"
+        stats = moderator.get_stats() if moderator else {}
+
+        return SecurityHealthCheckResponse(
+            status="healthy" if llm_status == "available" else "degraded",
+            service=self.service_name,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            llm_status=llm_status,
+            stats=stats
+        )
 
 
-app = FastAPI(
-    title="Security Service",
-    description="Сервис модерации и безопасности для проверки пользовательских запросов",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-# Добавляем middleware для трейсинга
-app.middleware("http")(TracingMiddleware("security-service"))
+# Создаем экземпляр сервиса
+service = SecurityService()
+app = service.app
 
 
 @app.post("/moderate", response_model=SecurityCheckResponse)
@@ -245,22 +245,6 @@ async def moderate_message(request: SecurityCheckRequest):
         )
 
 
-@app.get("/health")
-async def health_check():
-    """Проверка здоровья сервиса"""
-    llm_status = "available" if moderator else "unavailable"
-
-    stats = {}
-    if moderator:
-        stats = moderator.get_stats()
-
-    return SecurityHealthCheckResponse(
-        status="healthy" if llm_status == "available" else "degraded",
-        service="security-service",
-        timestamp="2024-01-01T00:00:00Z",  # В реальном проекте использовать datetime
-        llm_status=llm_status,
-        stats=stats
-    )
 
 
 @app.get("/stats")
@@ -279,16 +263,3 @@ async def get_stats():
     }
 
 
-@app.get("/")
-async def root():
-    """Информационная страница"""
-    return {
-        "service": "Security Service",
-        "version": "1.0.0",
-        "description": "Модерация и безопасность для пользовательских запросов",
-        "endpoints": {
-            "moderate": "POST /moderate",
-            "health": "GET /health",
-            "stats": "GET /stats"
-        }
-    }

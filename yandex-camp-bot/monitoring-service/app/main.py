@@ -7,6 +7,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 
 from common.config import config
+from common.utils import BaseService
 from .models import (
     LogEntry, LogEntryCreate, LogEntryResponse,
     MetricsEntry, MetricsEntryCreate, MetricsEntryResponse,
@@ -21,18 +22,65 @@ from .database import (
     init_db
 )
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Глобальная переменная для статуса БД
+db_initialized = False
 
-# Инициализация БД при запуске
-db_initialized = init_db()
+class MonitoringService(BaseService):
+    """Monitoring Service с использованием базового класса"""
 
-app = FastAPI(
-    title="Monitoring Service",
-    description="Сервис логирования и мониторинга микросервисов",
-    version="1.0.0"
-)
+    def __init__(self):
+        super().__init__(
+            service_name="monitoring-service",
+            version="1.0.0",
+            description="Сервис логирования и мониторинга микросервисов",
+            dependencies={"database": "available"}
+        )
+
+    async def on_startup(self):
+        """Инициализация БД"""
+        global db_initialized
+        db_initialized = init_db()
+        if not db_initialized:
+            raise Exception("Failed to initialize database")
+
+    async def check_dependencies(self):
+        """Проверка зависимостей monitoring service"""
+        dependencies_status = {}
+        dependencies_status["database"] = "available" if db_initialized else "unavailable"
+        return dependencies_status
+
+    def create_health_response(self, status: str, service_status: str = None, additional_stats: dict = None):
+        """Создание health check ответа для monitoring service"""
+        database_status = "available" if db_initialized else "unavailable"
+        stats = additional_stats or {}
+
+        # Получить базовую статистику
+        try:
+            from .database import SessionLocal
+            db = SessionLocal()
+            total_logs = db.query(LogEntryDB).count()
+            stats["total_logs"] = total_logs
+            db.close()
+        except Exception as e:
+            self.logger.error(f"Health check failed: {str(e)}")
+
+        return MonitoringHealthCheckResponse(
+            status="healthy" if database_status == "available" else "unhealthy",
+            service=self.service_name,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            database_status=database_status,
+            stats=stats
+        )
+
+
+# Создаем экземпляр сервиса
+service = MonitoringService()
+app = service.app
+
+# Простой тестовый endpoint
+@app.get("/test")
+async def test_endpoint():
+    return {"status": "OK", "message": "Monitoring service is working"}
 
 
 @app.post("/logs", response_model=LogEntryResponse)
@@ -267,29 +315,6 @@ async def get_system_stats(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
 
 
-@app.get("/health")
-async def health_check():
-    """Проверка здоровья сервиса"""
-    database_status = "available" if db_initialized else "unavailable"
-
-    stats = {}
-    try:
-        # Получить базовую статистику
-        from .database import SessionLocal
-        db = SessionLocal()
-        total_logs = db.query(LogEntryDB).count()
-        stats = {"total_logs": total_logs}
-        db.close()
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-
-    return MonitoringHealthCheckResponse(
-        status="healthy" if database_status == "available" else "unhealthy",
-        service="monitoring-service",
-        timestamp="2024-01-01T00:00:00Z",  # В реальном проекте использовать datetime
-        database_status=database_status,
-        stats=stats
-    )
 
 
 @app.post("/traces", response_model=TraceEntryResponse)
@@ -1234,35 +1259,3 @@ async def cleanup_old_logs(days: int = 30, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
 
 
-@app.get("/")
-async def root():
-    """Информационная страница"""
-    return {
-        "service": "Monitoring Service",
-        "version": "1.0.0",
-        "description": "Сервис логирования и мониторинга микросервисов",
-        "endpoints": {
-            "create_log": "POST /logs",
-            "bulk_logs": "POST /logs/bulk",
-            "get_logs": "GET /logs",
-            "create_metrics": "POST /metrics",
-            "create_trace": "POST /traces",
-            "get_traces": "GET /traces",
-            "get_trace_by_id": "GET /trace/{trace_id}",
-            "get_full_trace": "GET /trace/{trace_id}/full",
-            "get_full_request_trace": "GET /request/{request_id}/full",
-            "create_error": "POST /errors",
-            "get_errors": "GET /errors",
-            "get_technical_errors": "GET /errors/technical",
-            "get_errors_stats": "GET /errors/stats",
-            "traces_count": "GET /metrics/traces/count",
-            "errors_count": "GET /metrics/errors/count",
-            "performance": "GET /metrics/performance",
-            "services_summary": "GET /metrics/services/summary",
-            "security_violations": "GET /security/violations",
-            "security_violations_stats": "GET /security/violations/stats",
-            "system_stats": "GET /stats",
-            "health": "GET /health",
-            "cleanup": "DELETE /logs/cleanup"
-        }
-    }

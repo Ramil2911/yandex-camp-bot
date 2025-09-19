@@ -1,55 +1,11 @@
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
-from common.models import LogEntry, HealthCheckResponse
+from common.models import (
+    LogEntry, HealthCheckResponse,
+    TelegramMessage, SecurityCheckRequest, SecurityCheckResponse,
+    DialogueRequest, DialogueResponse, RAGSearchRequest, RAGSearchResponse
+)
 
-
-class TelegramMessage(BaseModel):
-    message: str
-    user_id: str
-    session_id: str
-    username: Optional[str] = None
-
-
-class SecurityCheckRequest(BaseModel):
-    message: str
-    user_id: str
-    session_id: str
-
-
-class SecurityCheckResponse(BaseModel):
-    allowed: bool
-    reason: Optional[str] = None
-    category: Optional[str] = None
-
-
-class DialogueRequest(BaseModel):
-    message: str
-    user_id: str
-    session_id: str
-    context: Optional[Dict[str, Any]] = None
-
-
-class DialogueResponse(BaseModel):
-    response: str
-    session_id: str
-
-
-class RAGSearchRequest(BaseModel):
-    query: str
-    user_id: str
-    session_id: str
-
-
-class RAGSearchResponse(BaseModel):
-    context: str
-    documents_found: int
-    search_time: float
-    documents_info: Optional[List[Dict[str, Any]]] = None
-    similarity_scores: Optional[List[float]] = None
-    error: Optional[str] = None
-
-
-# LogEntry импортируется из common.models
 
 # HealthCheckResponse наследуется от общего и расширяется специфичными полями
 class APIGatewayHealthCheckResponse(HealthCheckResponse):

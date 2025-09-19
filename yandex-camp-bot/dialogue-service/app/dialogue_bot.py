@@ -8,6 +8,7 @@ from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_community.chat_models import ChatOpenAI
 
 from common.config import config
+from common.utils.redis_client import redis_client
 from .models import SessionMemory, MemoryEntry, DialogueStats
 
 
@@ -55,12 +56,17 @@ class DialogueBot:
             self.llm_status = "unavailable"
             self.client = None
 
-        # Хранение истории сессий в памяти (в продакшене использовать Redis)
-        self.store: Dict[str, ChatMessageHistory] = {}
-        # Хранение времени последнего доступа к сессиям
-        self.session_timestamps: Dict[str, float] = {}
-        # Хранение user_id для каждой сессии
-        self.session_users: Dict[str, str] = {}
+        # Redis для хранения истории сессий
+        self.redis_available = redis_client.connection_status == "connected"
+
+        # Fallback: in-memory хранилище если Redis недоступен
+        if not self.redis_available:
+            logger.warning("Redis not available, using in-memory storage")
+            self.fallback_store: Dict[str, ChatMessageHistory] = {}
+            self.fallback_timestamps: Dict[str, float] = {}
+            self.fallback_users: Dict[str, str] = {}
+        else:
+            logger.info("Redis storage initialized for dialogues")
 
         # Статистика
         self.stats = DialogueStats(
@@ -71,6 +77,9 @@ class DialogueBot:
             active_sessions=0,
             total_tokens_used=0
         )
+
+        # Инициализация кеша истории для LangChain
+        self._history_cache: Dict[str, ChatMessageHistory] = {}
 
         # Настройка LangChain цепочки только если LLM доступен
         if self.llm_status == "available":
@@ -106,23 +115,108 @@ class DialogueBot:
             history_messages_key="history"
         )
 
-    def _initialize_session(self, session_id: str, user_id: str):
+    async def _initialize_session(self, session_id: str, user_id: str):
         """Инициализация новой сессии с user_id"""
-        if session_id not in self.store:
-            self.store[session_id] = ChatMessageHistory()
-            self.session_users[session_id] = user_id
-            self.stats.active_sessions = len(self.store)
-            logger.info(f"New session initialized: {session_id} for user: {user_id}")
+        if self.redis_available:
+            # Проверяем, существует ли уже сессия в Redis
+            existing_dialogue = await redis_client.get_dialogue(session_id)
+            if not existing_dialogue:
+                # Создаем новую сессию в Redis
+                dialogue_data = {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "created_at": time.time(),
+                    "last_activity": time.time(),
+                    "messages": [],
+                    "message_count": 0,
+                    "metadata": {}
+                }
+                success = await redis_client.set_dialogue(session_id, dialogue_data)
+                if success:
+                    logger.info(f"New session initialized in Redis: {session_id} for user: {user_id}")
+                else:
+                    logger.error(f"Failed to initialize session {session_id} in Redis")
+            # Обновляем статистику активных сессий
+            await self._update_active_sessions_count()
+        else:
+            # Fallback на in-memory
+            if session_id not in self.fallback_store:
+                self.fallback_store[session_id] = ChatMessageHistory()
+                self.fallback_users[session_id] = user_id
+                self.stats.active_sessions = len(self.fallback_store)
+                logger.info(f"New session initialized (fallback): {session_id} for user: {user_id}")
+
+    async def _update_active_sessions_count(self):
+        """Обновление счетчика активных сессий"""
+        if self.redis_available:
+            try:
+                all_dialogues = await redis_client.get_all_active_dialogues()
+                self.stats.active_sessions = len(all_dialogues)
+            except Exception as e:
+                logger.error(f"Failed to update active sessions count: {e}")
+                self.stats.active_sessions = 0
+        else:
+            self.stats.active_sessions = len(self.fallback_store)
 
     def _get_session_history(self, session_id: str):
-        """Получение истории сессии"""
-        if session_id not in self.store:
-            self.store[session_id] = ChatMessageHistory()
-            self.stats.active_sessions = len(self.store)
+        """Получение истории сессии для LangChain"""
+        # Этот метод должен оставаться синхронным для совместимости с LangChain
+        # Мы будем использовать in-memory кеш для активных сессий
+        if session_id not in self._history_cache:
+            self._history_cache[session_id] = ChatMessageHistory()
 
-        # Обновляем timestamp последнего доступа
-        self.session_timestamps[session_id] = time.time()
-        return self.store[session_id]
+        return self._history_cache[session_id]
+
+    async def _load_session_history_from_redis(self, session_id: str) -> ChatMessageHistory:
+        """Загрузка истории сессии из Redis и конвертация в ChatMessageHistory"""
+        if not self.redis_available:
+            return self._get_session_history(session_id)
+
+        dialogue = await redis_client.get_dialogue(session_id)
+        if not dialogue:
+            return ChatMessageHistory()
+
+        history = ChatMessageHistory()
+        for msg_data in dialogue.get("messages", []):
+            from langchain_core.messages import HumanMessage, AIMessage
+
+            if msg_data["role"] == "human":
+                history.add_message(HumanMessage(content=msg_data["content"]))
+            elif msg_data["role"] == "ai":
+                history.add_message(AIMessage(content=msg_data["content"]))
+
+        # Обновляем кеш
+        self._history_cache[session_id] = history
+        return history
+
+    async def _save_session_history_to_redis(self, session_id: str):
+        """Сохранение истории сессии в Redis"""
+        if not self.redis_available:
+            return
+
+        history = self._get_session_history(session_id)
+        messages_data = []
+
+        for msg in history.messages:
+            messages_data.append({
+                "role": msg.type,  # "human" или "ai"
+                "content": msg.content,
+                "timestamp": time.time()
+            })
+
+        dialogue_data = {
+            "session_id": session_id,
+            "user_id": getattr(self, 'current_user_id', 'unknown'),
+            "created_at": time.time(),
+            "last_activity": time.time(),
+            "messages": messages_data,
+            "message_count": len(messages_data),
+            "metadata": {}
+        }
+
+        success = await redis_client.set_dialogue(session_id, dialogue_data)
+        if not success:
+            logger.error(f"Failed to save session history to Redis: {session_id}")
 
     def _prepare_context(self, context: Optional[Dict[str, Any]]) -> str:
         """Подготовка контекста для промпта"""
@@ -152,8 +246,14 @@ class DialogueBot:
         start_time = time.time()
         self.stats.total_requests += 1
 
-        # Инициализируем сессию с user_id
-        self._initialize_session(session_id, user_id)
+        # Сохраняем user_id для использования в других методах
+        self.current_user_id = user_id
+
+        # Инициализируем сессию с user_id (асинхронно)
+        await self._initialize_session(session_id, user_id)
+
+        # Загружаем историю из Redis перед обработкой
+        await self._load_session_history_from_redis(session_id)
 
         try:
             # Подготовка контекста
@@ -194,6 +294,9 @@ class DialogueBot:
                 "context_used": bool(rag_context)
             }
 
+            # Сохраняем обновленную историю в Redis
+            await self._save_session_history_to_redis(session_id)
+
             logger.info(
                 f"Dialogue processed for session {session_id}: "
                 f"time={processing_time:.2f}s, "
@@ -222,91 +325,177 @@ class DialogueBot:
                 "error": str(e)
             }
 
-    def clear_memory(self, session_id: str) -> int:
+    async def clear_memory(self, session_id: str) -> int:
         """Очистка памяти разговора"""
-        if session_id in self.store:
-            message_count = len(self.store[session_id].messages)
-            self.store[session_id].clear()
-            # Удаляем связанные данные при очистке сессии
-            if session_id in self.session_timestamps:
-                del self.session_timestamps[session_id]
-            if session_id in self.session_users:
-                del self.session_users[session_id]
-            logger.info(f"Memory cleared for session {session_id}: {message_count} messages")
-            return message_count
-        return 0
+        if self.redis_available:
+            # Получаем текущую историю для подсчета сообщений
+            dialogue = await redis_client.get_dialogue(session_id)
+            message_count = 0
+            if dialogue:
+                message_count = dialogue.get("message_count", 0)
 
-    def get_dialogue_history(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+            # Очищаем диалог в Redis
+            success = await redis_client.clear_dialogue(session_id)
+            if success:
+                # Очищаем кеш
+                if session_id in self._history_cache:
+                    self._history_cache[session_id].clear()
+
+                # Обновляем статистику активных сессий
+                await self._update_active_sessions_count()
+
+                logger.info(f"Memory cleared for session {session_id}: {message_count} messages")
+                return message_count
+            else:
+                logger.error(f"Failed to clear memory for session {session_id}")
+                return 0
+        else:
+            # Fallback на in-memory
+            if session_id in self.fallback_store:
+                message_count = len(self.fallback_store[session_id].messages)
+                self.fallback_store[session_id].clear()
+                # Удаляем связанные данные при очистке сессии
+                if session_id in self.fallback_timestamps:
+                    del self.fallback_timestamps[session_id]
+                if session_id in self.fallback_users:
+                    del self.fallback_users[session_id]
+                logger.info(f"Memory cleared (fallback) for session {session_id}: {message_count} messages")
+                return message_count
+            return 0
+
+    async def get_dialogue_history(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Получение истории диалога для API"""
-        if session_id not in self.store:
+        if self.redis_available:
+            # Используем Redis метод
+            return await redis_client.get_dialogue_history(session_id, limit)
+        else:
+            # Fallback на in-memory
+            if session_id not in self.fallback_store:
+                return []
+
+            history = self.fallback_store[session_id]
+            messages = []
+
+            for msg in history.messages[-limit:]:  # Берем последние limit сообщений
+                messages.append({
+                    "role": msg.type,
+                    "content": msg.content,
+                    "timestamp": time.time()
+                })
+
+            return messages
+
+    async def search_dialogues_by_trace(self, trace_id: str) -> List[Dict[str, Any]]:
+        """Поиск диалогов по trace_id"""
+        if self.redis_available:
+            # Используем Redis метод
+            return await redis_client.search_dialogues_by_trace(trace_id)
+        else:
+            # Fallback: поиск не поддерживается в in-memory режиме
+            logger.warning(f"Trace search not available in fallback mode for trace_id: {trace_id}")
             return []
 
-        history = self.store[session_id]
-        messages = []
-
-        for msg in history.messages[-limit:]:  # Берем последние limit сообщений
-            messages.append({
-                "role": msg.type,
-                "content": msg.content,
-                "timestamp": time.time()
-            })
-
-        return messages
-
-    def search_dialogues_by_trace(self, trace_id: str) -> List[Dict[str, Any]]:
-        """Поиск диалогов по trace_id (заглушка, пока нет реализации трейсинга)"""
-        # В текущей реализации нет системы трейсинга, поэтому возвращаем пустой результат
-        logger.warning(f"Trace search not implemented yet for trace_id: {trace_id}")
-        return []
-
-    def get_session_info(self, session_id: str) -> Optional[SessionMemory]:
+    async def get_session_info(self, session_id: str) -> Optional[SessionMemory]:
         """Получение информации о сессии"""
-        if session_id not in self.store:
-            return None
+        if self.redis_available:
+            # Используем Redis для получения статистики сессии
+            stats = await redis_client.get_dialogue_stats(session_id)
+            if not stats:
+                return None
 
-        history = self.store[session_id]
-        messages = []
+            # Получаем историю сообщений
+            messages_data = await redis_client.get_dialogue_history(session_id, limit=1000)
+            messages = []
 
-        for msg in history.messages:
-            messages.append(MemoryEntry(
-                role=msg.type,
-                content=msg.content,
-                timestamp=time.time()
-            ))
+            for msg_data in messages_data:
+                messages.append(MemoryEntry(
+                    role=msg_data.get("role", "unknown"),
+                    content=msg_data.get("content", ""),
+                    timestamp=msg_data.get("timestamp", time.time())
+                ))
 
-        return SessionMemory(
-            session_id=session_id,
-            messages=messages,
-            created_at=time.time(),
-            last_accessed=self.session_timestamps.get(session_id, time.time()),
-            user_id=self.session_users.get(session_id, "unknown")
-        )
+            return SessionMemory(
+                session_id=session_id,
+                messages=messages,
+                created_at=stats.get("created_at", time.time()),
+                last_accessed=stats.get("last_activity", time.time()),
+                user_id=stats.get("user_id", "unknown")
+            )
+        else:
+            # Fallback на in-memory
+            if session_id not in self.fallback_store:
+                return None
+
+            history = self.fallback_store[session_id]
+            messages = []
+
+            for msg in history.messages:
+                messages.append(MemoryEntry(
+                    role=msg.type,
+                    content=msg.content,
+                    timestamp=time.time()
+                ))
+
+            return SessionMemory(
+                session_id=session_id,
+                messages=messages,
+                created_at=time.time(),
+                last_accessed=self.fallback_timestamps.get(session_id, time.time()),
+                user_id=self.fallback_users.get(session_id, "unknown")
+            )
 
     def get_stats(self) -> DialogueStats:
         """Получение статистики бота"""
         return self.stats
 
-    def cleanup_old_sessions(self, max_age_hours: int = 24):
+    async def cleanup_old_sessions(self, max_age_hours: int = 24):
         """Очистка старых сессий"""
-        current_time = time.time()
-        max_age_seconds = max_age_hours * 3600
+        if self.redis_available:
+            # Для Redis очистка происходит автоматически через TTL
+            # Но мы можем проверить и удалить явно старые сессии
+            try:
+                all_dialogues = await redis_client.get_all_active_dialogues()
+                current_time = time.time()
+                max_age_seconds = max_age_hours * 3600
 
-        sessions_to_remove = []
-        for session_id in list(self.store.keys()):
-            # Проверяем время последнего доступа из session_timestamps
-            last_access = self.session_timestamps.get(session_id, current_time)
-            if current_time - last_access > max_age_seconds:
-                sessions_to_remove.append(session_id)
+                cleaned_count = 0
+                for dialogue in all_dialogues:
+                    last_activity = dialogue.get("last_activity", 0)
+                    if current_time - last_activity > max_age_seconds:
+                        session_id = dialogue.get("session_id")
+                        if session_id:
+                            await redis_client.clear_dialogue(session_id)
+                            cleaned_count += 1
 
-        for session_id in sessions_to_remove:
-            del self.store[session_id]
-            # Удаляем связанные данные
-            if session_id in self.session_timestamps:
-                del self.session_timestamps[session_id]
-            if session_id in self.session_users:
-                del self.session_users[session_id]
+                if cleaned_count > 0:
+                    logger.info(f"Cleaned up {cleaned_count} old sessions from Redis")
 
-        if sessions_to_remove:
-            logger.info(f"Cleaned up {len(sessions_to_remove)} old sessions")
+                # Обновляем статистику
+                await self._update_active_sessions_count()
 
-        self.stats.active_sessions = len(self.store)
+            except Exception as e:
+                logger.error(f"Failed to cleanup old sessions: {e}")
+        else:
+            # Fallback на in-memory
+            current_time = time.time()
+            max_age_seconds = max_age_hours * 3600
+
+            sessions_to_remove = []
+            for session_id in list(self.fallback_store.keys()):
+                # Проверяем время последнего доступа из fallback_timestamps
+                last_access = self.fallback_timestamps.get(session_id, current_time)
+                if current_time - last_access > max_age_seconds:
+                    sessions_to_remove.append(session_id)
+
+            for session_id in sessions_to_remove:
+                del self.fallback_store[session_id]
+                # Удаляем связанные данные
+                if session_id in self.fallback_timestamps:
+                    del self.fallback_timestamps[session_id]
+                if session_id in self.fallback_users:
+                    del self.fallback_users[session_id]
+
+            if sessions_to_remove:
+                logger.info(f"Cleaned up {len(sessions_to_remove)} old sessions (fallback)")
+
+            self.stats.active_sessions = len(self.fallback_store)

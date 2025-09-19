@@ -1,53 +1,88 @@
 import time
 import logging
 from fastapi import FastAPI, HTTPException
-from contextlib import asynccontextmanager
+from loguru import logger
 
 from common.config import config
 from common.utils.tracing_middleware import TracingMiddleware, log_error, monitoring_client
+from common.utils import BaseService
 from .models import (
     DialogueRequest, DialogueResponse, ClearMemoryRequest, ClearMemoryResponse,
     DialogueHealthCheckResponse, LogEntry
 )
 from .dialogue_bot import DialogueBot
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # Глобальные переменные
 dialogue_bot = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Управление жизненным циклом приложения"""
-    global dialogue_bot
+class DialogueService(BaseService):
+    """Dialogue Service с использованием базового класса"""
 
-    logger.info("Starting Dialogue Service...")
+    def __init__(self):
+        super().__init__(
+            service_name="dialogue-service",
+            version="1.0.0",
+            description="Сервис диалогового ИИ с поддержкой контекста и памяти",
+            dependencies={"llm": "available", "memory": "available"}
+        )
 
-    # Инициализация диалогового бота
-    try:
-        dialogue_bot = DialogueBot()
-        logger.info("DialogueBot initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize DialogueBot: {e}")
-        dialogue_bot = None
+    async def on_startup(self):
+        """Инициализация диалогового бота"""
+        global dialogue_bot
 
-    yield
+        # Инициализация диалогового бота
+        try:
+            dialogue_bot = DialogueBot()
+            self.logger.info("DialogueBot initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize DialogueBot: {e}")
+            dialogue_bot = None
+            raise e
 
-    logger.info("Shutting down Dialogue Service...")
+    async def on_shutdown(self):
+        """Очистка ресурсов"""
+        global dialogue_bot
+        if dialogue_bot:
+            # Здесь можно добавить очистку ресурсов dialogue_bot
+            pass
+
+    async def check_dependencies(self):
+        """Проверка зависимостей dialogue service"""
+        dependencies_status = {}
+
+        # Проверяем LLM статус
+        if dialogue_bot:
+            dependencies_status["llm"] = dialogue_bot.llm_status
+            dependencies_status["memory"] = "available" if dialogue_bot.get_stats().active_sessions >= 0 else "error"
+        else:
+            dependencies_status["llm"] = "unavailable"
+            dependencies_status["memory"] = "unavailable"
+
+        return dependencies_status
+
+    def create_health_response(self, status: str, service_status: str = None, additional_stats: dict = None):
+        """Создание health check ответа для dialogue service"""
+        if dialogue_bot:
+            llm_status = dialogue_bot.llm_status
+            memory_sessions = dialogue_bot.get_stats().active_sessions
+        else:
+            llm_status = "unavailable"
+            memory_sessions = 0
+
+        return DialogueHealthCheckResponse(
+            status=status,
+            service=self.service_name,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            llm_status=llm_status,
+            memory_sessions=memory_sessions,
+            stats=additional_stats or {}
+        )
 
 
-app = FastAPI(
-    title="Dialogue Service",
-    description="Сервис диалогового ИИ с поддержкой контекста и памяти",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-# Добавляем middleware для трейсинга
-app.middleware("http")(TracingMiddleware("dialogue-service"))
+# Создаем экземпляр сервиса
+service = DialogueService()
+app = service.app
 
 
 @app.post("/dialogue", response_model=DialogueResponse)
@@ -94,7 +129,7 @@ async def clear_memory(request: ClearMemoryRequest):
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        messages_cleared = dialogue_bot.clear_memory(request.session_id)
+        messages_cleared = await dialogue_bot.clear_memory(request.session_id)
 
         return ClearMemoryResponse(
             success=True,
@@ -131,7 +166,7 @@ async def get_session_info(session_id: str):
     if not dialogue_bot:
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
-    session_info = dialogue_bot.get_session_info(session_id)
+    session_info = await dialogue_bot.get_session_info(session_id)
     if not session_info:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -145,46 +180,13 @@ async def cleanup_sessions():
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        dialogue_bot.cleanup_old_sessions()
+        await dialogue_bot.cleanup_old_sessions()
         return {"message": "Sessions cleaned up successfully"}
     except Exception as e:
         logger.error(f"Session cleanup failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
 
 
-@app.get("/health")
-async def health_check():
-    """Проверка здоровья сервиса"""
-    if not dialogue_bot:
-        return DialogueHealthCheckResponse(
-            status="unhealthy",
-            service="dialogue-service",
-            timestamp="2024-01-01T00:00:00Z",
-            llm_status="unavailable",
-            memory_sessions=0,
-            stats={}
-        )
-
-    # Используем статус из dialogue_bot
-    llm_status = dialogue_bot.llm_status
-    stats = dialogue_bot.get_stats().dict()
-
-    # Определяем общий статус
-    if llm_status == "available":
-        overall_status = "healthy"
-    elif llm_status == "unavailable":
-        overall_status = "unhealthy"
-    else:
-        overall_status = "degraded"
-
-    return DialogueHealthCheckResponse(
-        status=overall_status,
-        service="dialogue-service",
-        timestamp="2024-01-01T00:00:00Z",
-        llm_status=llm_status,
-        memory_sessions=stats.get("active_sessions", 0),
-        stats=stats
-    )
 
 
 @app.get("/stats")
@@ -212,7 +214,7 @@ async def get_dialogue_history(session_id: str, limit: int = 50):
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        history = dialogue_bot.get_dialogue_history(session_id, limit)
+        history = await dialogue_bot.get_dialogue_history(session_id, limit)
         return {
             "session_id": session_id,
             "history": history,
@@ -230,7 +232,7 @@ async def search_dialogues_by_trace(trace_id: str):
         raise HTTPException(status_code=503, detail="DialogueBot not available")
 
     try:
-        dialogues = dialogue_bot.search_dialogues_by_trace(trace_id)
+        dialogues = await dialogue_bot.search_dialogues_by_trace(trace_id)
         return {
             "trace_id": trace_id,
             "dialogues": dialogues,
@@ -241,21 +243,3 @@ async def search_dialogues_by_trace(trace_id: str):
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
-@app.get("/")
-async def root():
-    """Информационная страница"""
-    return {
-        "service": "Dialogue Service",
-        "version": "1.0.0",
-        "description": "Диалоговый ИИ с поддержкой контекста и памяти",
-        "endpoints": {
-            "dialogue": "POST /dialogue",
-            "clear_memory": "POST /clear-memory",
-            "session_info": "GET /session/{session_id}",
-            "dialogue_history": "GET /dialogue/{session_id}/history",
-            "search_by_trace": "GET /dialogue/trace/{trace_id}",
-            "cleanup": "POST /cleanup",
-            "health": "GET /health",
-            "stats": "GET /stats"
-        }
-    }
