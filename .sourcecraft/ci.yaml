@@ -54,10 +54,12 @@ tasks:
             for service in "${services[@]}"; do
               echo "Deploying $service..."
               ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
+                # Добавляем пути к yc и docker-credential-yc
+                export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
                 cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
                 docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile . && \
                 docker push cr.yandex/$REGISTRY_ID/$service:latest && \
-                yc serverless container revision deploy \
+                /home/yandexcamp/yandex-cloud/bin/yc serverless container revision deploy \
                   --container-name $service \
                   --image cr.yandex/$REGISTRY_ID/$service:latest \
                   --service-account-id $SERVICE_ACCOUNT_ID
@@ -87,10 +89,12 @@ tasks:
             
             echo "Deploying rag-service..."
             ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
+              # Добавляем пути к yc и docker-credential-yc
+              export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
               cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
               docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile . && \
               docker push cr.yandex/$REGISTRY_ID/rag-service:latest && \
-              yc serverless container revision deploy \
+              /home/yandexcamp/yandex-cloud/bin/yc serverless container revision deploy \
                 --container-name rag-service \
                 --image cr.yandex/$REGISTRY_ID/rag-service:latest \
                 --service-account-id $SERVICE_ACCOUNT_ID
