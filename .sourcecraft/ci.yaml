@@ -61,7 +61,7 @@ tasks:
             
             for service in "${services[@]}"; do
               echo "Deploying $service..."
-              ssh $SSH_USER@$SSH_HOST "cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
+              ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST "cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
                 docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile . && \
                 docker push cr.yandex/$REGISTRY_ID/$service:latest && \
                 yc serverless container revision deploy \
@@ -84,7 +84,7 @@ tasks:
         script: 
           - |
             echo "Deploying rag-service..."
-            ssh $SSH_USER@$SSH_HOST "cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
+            ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST "cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
               docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile . && \
               docker push cr.yandex/$REGISTRY_ID/rag-service:latest && \
               yc serverless container revision deploy \
