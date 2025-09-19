@@ -1,1 +1,30 @@
-132
+on:
+  pull_request:
+  - workflows: ci-cd-all
+    filter:
+      source_branches: [""]
+      target_branches: "master"
+  push:
+  - workflows: ci-cd-all
+    filter:
+      branches: "master"
+workflows:
+  ci-cd-all:
+    tasks:
+      - build-push-deploy
+tasks:
+  - name: build-push-deploy
+    env:
+    
+
+    cubes:
+      - name:
+        script:
+      - name:
+        script:
+      - name:
+        script:
+      - name:
+        script:
+      - name:
+        script:
