@@ -11,6 +11,6 @@ COPY rag-service /app
 # Создаем директорию для данных
 RUN mkdir -p /app/data /app/chroma_db
 
-EXPOSE 8002
+EXPOSE $PORT
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
