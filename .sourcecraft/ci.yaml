@@ -1,6 +1,6 @@
 on:
   pull_request:
-    - workflows: [deploy-all-services, deploy-rag-service]
+    - workflows: [deploy-all-services]
       filter:
         source_branches: [""]
         target_branches: ["master"]
@@ -12,7 +12,7 @@ on:
         paths: ["yandex-camp-bot/rag-service/**"]
 
   push:
-    - workflows: [deploy-all-services, deploy-rag-service]
+    - workflows: [deploy-all-services]
       filter:
         branches: ["master"]
 
