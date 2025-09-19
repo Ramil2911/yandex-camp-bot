@@ -1,86 +1,36 @@
 on:
   pull_request:
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
+    - workflows: [deploy-all-services, deploy-rag-service]
       filter:
         source_branches: [""]
         target_branches: ["master"]
-        paths: ["yandex-camp-bot/api-gateway/**"]
 
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
-      filter:
-        source_branches: [""]
-        target_branches: ["master"]
-        paths: ["yandex-camp-bot/monitoring-service/**"]
-
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
-      filter:
-        source_branches: [""]
-        target_branches: ["master"]
-        paths: ["yandex-camp-bot/dialogue-service/**"]
-
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
+    - workflows: [deploy-rag-service]
       filter:
         source_branches: [""]
         target_branches: ["master"]
         paths: ["yandex-camp-bot/rag-service/**"]
-
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
-      filter:
-        source_branches: [""]
-        target_branches: ["master"]
-        paths: ["yandex-camp-bot/security-service/**"]
 
   push:
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
+    - workflows: [deploy-all-services, deploy-rag-service]
       filter:
         branches: ["master"]
-        paths: ["yandex-camp-bot/api-gateway/**"]
 
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
-      filter:
-        branches: ["master"]
-        paths: ["yandex-camp-bot/monitoring-service/**"]
-
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
-      filter:
-        branches: ["master"]
-        paths: ["yandex-camp-bot/dialogue-service/**"]
-
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
+    - workflows: [deploy-rag-service]
       filter:
         branches: ["master"]
         paths: ["yandex-camp-bot/rag-service/**"]
 
-    - workflows: [deploy-api-gateway, deploy-monitoring-service, deploy-dialogue-service, deploy-rag-service, deploy-security-service]
-      filter:
-        branches: ["master"]
-        paths: ["yandex-camp-bot/security-service/**"]
-
 workflows:
-  deploy-api-gateway:
+  deploy-all-services:
     tasks:
       - setup-ssh
-      - deploy-api-gateway
-
-  deploy-monitoring-service:
-    tasks:
-      - setup-ssh
-      - deploy-monitoring-service
-
-  deploy-dialogue-service:
-    tasks:
-      - setup-ssh
-      - deploy-dialogue-service
+      - deploy-regular-services
 
   deploy-rag-service:
     tasks:
       - setup-ssh
-      - deploy-rag-service
-
-  deploy-security-service:
-    tasks:
-      - setup-ssh
-      - deploy-security-service
+      - deploy-rag-only
 
 tasks:
   - name: setup-ssh
@@ -97,67 +47,35 @@ tasks:
             chmod 600 ~/.ssh/id_rsa
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
 
-  - name: deploy-api-gateway
+  - name: deploy-regular-services
     env:
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
       REGISTRY_ID: ${{ secrets.REGISTRY_ID }}
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
     cubes:
-      - name: build-push-deploy-api
+      - name: build-push-deploy-regular
         script: 
           - |
-            ssh $SSH_USER@$SSH_HOST << 'EOF'
-              cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
-              docker build -t cr.yandex/$REGISTRY_ID/api-gateway:latest -f api-gateway/Dockerfile .
-              docker push cr.yandex/$REGISTRY_ID/api-gateway:latest
-              yc serverless container revision deploy \
-                --container-name api-gateway \
-                --image cr.yandex/$REGISTRY_ID/api-gateway:latest \
-                --service-account-id $SERVICE_ACCOUNT_ID
-            EOF
+            services=("api-gateway" "monitoring-service" "dialogue-service" "security-service")
+            
+            for service in "${services[@]}"; do
+              echo "Deploying $service..."
+              ssh $SSH_USER@$SSH_HOST << EOF
+                cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
+                docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile .
+                docker push cr.yandex/$REGISTRY_ID/$service:latest
+                yc serverless container revision deploy \
+                  --container-name $service \
+                  --image cr.yandex/$REGISTRY_ID/$service:latest \
+                  --service-account-id $SERVICE_ACCOUNT_ID
+              EOF
+              echo "Finished deploying $service"
+            done
+            
+            echo "Regular services deployed successfully!"
 
-  - name: deploy-monitoring-service
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
-      REGISTRY_ID: ${{ secrets.REGISTRY_ID }}
-      SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
-    cubes:
-      - name: build-push-deploy-monitoring
-        script: 
-          - |
-            ssh $SSH_USER@$SSH_HOST << 'EOF'
-              cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
-              docker build -t cr.yandex/$REGISTRY_ID/monitoring-service:latest -f monitoring-service/Dockerfile .
-              docker push cr.yandex/$REGISTRY_ID/monitoring-service:latest
-              yc serverless container revision deploy \
-                --container-name monitoring-service \
-                --image cr.yandex/$REGISTRY_ID/monitoring-service:latest \
-                --service-account-id $SERVICE_ACCOUNT_ID
-            EOF
-
-  - name: deploy-dialogue-service
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
-      REGISTRY_ID: ${{ secrets.REGISTRY_ID }}
-      SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
-    cubes:
-      - name: build-push-deploy-dialogue
-        script: 
-          - |
-            ssh $SSH_USER@$SSH_HOST << 'EOF'
-              cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
-              docker build -t cr.yandex/$REGISTRY_ID/dialogue-service:latest -f dialogue-service/Dockerfile .
-              docker push cr.yandex/$REGISTRY_ID/dialogue-service:latest
-              yc serverless container revision deploy \
-                --container-name dialogue-service \
-                --image cr.yandex/$REGISTRY_ID/dialogue-service:latest \
-                --service-account-id $SERVICE_ACCOUNT_ID
-            EOF
-
-  - name: deploy-rag-service
+  - name: deploy-rag-only
     env:
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
@@ -167,7 +85,8 @@ tasks:
       - name: build-push-deploy-rag
         script: 
           - |
-            ssh $SSH_USER@$SSH_HOST << 'EOF'
+            echo "Deploying rag-service..."
+            ssh $SSH_USER@$SSH_HOST << EOF
               cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
               docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile .
               docker push cr.yandex/$REGISTRY_ID/rag-service:latest
@@ -176,23 +95,4 @@ tasks:
                 --image cr.yandex/$REGISTRY_ID/rag-service:latest \
                 --service-account-id $SERVICE_ACCOUNT_ID
             EOF
-
-  - name: deploy-security-service
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
-      REGISTRY_ID: ${{ secrets.REGISTRY_ID }}
-      SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
-    cubes:
-      - name: build-push-deploy-security
-        script: 
-          - |
-            ssh $SSH_USER@$SSH_HOST << 'EOF'
-              cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
-              docker build -t cr.yandex/$REGISTRY_ID/security-service:latest -f security-service/Dockerfile .
-              docker push cr.yandex/$REGISTRY_ID/security-service:latest
-              yc serverless container revision deploy \
-                --container-name security-service \
-                --image cr.yandex/$REGISTRY_ID/security-service:latest \
-                --service-account-id $SERVICE_ACCOUNT_ID
-            EOF
+            echo "Finished deploying rag-service"
