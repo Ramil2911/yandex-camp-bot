@@ -11,4 +11,3 @@ class SecurityHealthCheckResponse(HealthCheckResponse):
     llm_status: str
 
 
-#test_ci
