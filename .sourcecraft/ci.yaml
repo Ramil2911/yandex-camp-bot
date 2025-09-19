@@ -9,7 +9,7 @@ on:
       filter:
         source_branches: [""]
         target_branches: ["master"]
-        paths: ["yandex-camp-bot/rag-service/**"]
+        paths: ["rag-service/**"]
 
   push:
     - workflows: [deploy-all-services, deploy-rag-service]
@@ -19,7 +19,7 @@ on:
     - workflows: [deploy-rag-service]
       filter:
         branches: ["master"]
-        paths: ["yandex-camp-bot/rag-service/**"]
+        paths: ["rag-service/**"]
 
 workflows:
   deploy-all-services:
@@ -50,7 +50,9 @@ tasks:
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
             # Проверяем что ключ валидный
             ssh-keygen -l -f ~/.ssh/id_rsa
-            echo "SSH setup completed"
+            echo "SSH setup completed in $(pwd)"
+            echo "SSH key path: $(realpath ~/.ssh/id_rsa)"
+            ls -la ~/.ssh/
 
   - name: deploy-regular-services
     env:
@@ -70,15 +72,22 @@ tasks:
               eval $(ssh-agent -s)
               ssh-add ~/.ssh/id_rsa
               
-              ssh -o StrictHostKeyChecking=no -o BatchMode=yes -v $SSH_USER@$SSH_HOST "
-                cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
-                docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile . && \
-                docker push cr.yandex/$REGISTRY_ID/$service:latest && \
-                yc serverless container revision deploy \
-                  --container-name $service \
-                  --image cr.yandex/$REGISTRY_ID/$service:latest \
-                  --service-account-id $SERVICE_ACCOUNT_ID
-              "
+              # Проверяем доступность ключа
+              if [ -f ~/.ssh/id_rsa ]; then
+                echo "SSH key found at: $(realpath ~/.ssh/id_rsa)"
+                ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
+                  cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
+                  docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile . && \
+                  docker push cr.yandex/$REGISTRY_ID/$service:latest && \
+                  yc serverless container revision deploy \
+                    --container-name $service \
+                    --image cr.yandex/$REGISTRY_ID/$service:latest \
+                    --service-account-id $SERVICE_ACCOUNT_ID
+                "
+              else
+                echo "ERROR: SSH key not found at ~/.ssh/id_rsa"
+                exit 1
+              fi
               echo "Finished deploying $service"
             done
             
@@ -99,13 +108,20 @@ tasks:
             eval $(ssh-agent -s)
             ssh-add ~/.ssh/id_rsa
             
-            ssh -o StrictHostKeyChecking=no -o BatchMode=yes -v $SSH_USER@$SSH_HOST "
-              cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
-              docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile . && \
-              docker push cr.yandex/$REGISTRY_ID/rag-service:latest && \
-              yc serverless container revision deploy \
-                --container-name rag-service \
-                --image cr.yandex/$REGISTRY_ID/rag-service:latest \
-                --service-account-id $SERVICE_ACCOUNT_ID
-            "
+            # Проверяем доступность ключа
+            if [ -f ~/.ssh/id_rsa ]; then
+              echo "SSH key found at: $(realpath ~/.ssh/id_rsa)"
+              ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
+                cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
+                docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile . && \
+                docker push cr.yandex/$REGISTRY_ID/rag-service:latest && \
+                yc serverless container revision deploy \
+                  --container-name rag-service \
+                  --image cr.yandex/$REGISTRY_ID/rag-service:latest \
+                  --service-account-id $SERVICE_ACCOUNT_ID
+              "
+            else
+              echo "ERROR: SSH key not found at ~/.ssh/id_rsa"
+              exit 1
+            fi
             echo "Finished deploying rag-service"
