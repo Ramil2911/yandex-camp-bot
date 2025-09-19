@@ -27,7 +27,8 @@ tasks:
       SSH_KEY: ${{ secrets.SSH_KEY }}
     cubes:
       - name: configure-ssh
-        script: |
+        script: 
+        - |
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
@@ -41,7 +42,8 @@ tasks:
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
     cubes:
       - name: build-push-deploy-api
-        script: |
+        script: 
+        - |
           ssh $SSH_USER@$SSH_HOST << 'EOF'
             cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
             docker build -t cr.yandex/$REGISTRY_ID/api-gateway:latest -f api-gateway/Dockerfile .
@@ -60,7 +62,8 @@ tasks:
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
     cubes:
       - name: build-push-deploy-monitoring
-        script: |
+        script: 
+        - |
           ssh $SSH_USER@$SSH_HOST << 'EOF'
             cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
             docker build -t cr.yandex/$REGISTRY_ID/monitoring-service:latest -f monitoring-service/Dockerfile .
@@ -79,7 +82,8 @@ tasks:
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
     cubes:
       - name: build-push-deploy-dialogue
-        script: |
+        script: 
+        - |
           ssh $SSH_USER@$SSH_HOST << 'EOF'
             cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
             docker build -t cr.yandex/$REGISTRY_ID/dialogue-service:latest -f dialogue-service/Dockerfile .
@@ -98,7 +102,8 @@ tasks:
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
     cubes:
       - name: build-push-deploy-rag
-        script: |
+        script: 
+        - |
           ssh $SSH_USER@$SSH_HOST << 'EOF'
             cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
             docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile .
@@ -117,7 +122,8 @@ tasks:
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
     cubes:
       - name: build-push-deploy-security
-        script: |
+        script: 
+        - |
           ssh $SSH_USER@$SSH_HOST << 'EOF'
             cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot
             docker build -t cr.yandex/$REGISTRY_ID/security-service:latest -f security-service/Dockerfile .
