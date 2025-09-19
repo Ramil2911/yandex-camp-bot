@@ -469,3 +469,6 @@ class RAGSystem:
         self.documents = []
         self._load_documents()
         logger.info("Documents reloaded")
+
+
+#test ci
