@@ -1,8 +1,9 @@
 import logging
 import asyncio
 import time
-from fastapi import FastAPI, HTTPException, Request
-from aiogram import Bot, Dispatcher
+from fastapi import FastAPI, HTTPException, Request, status
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Update
 
 from common.config import config
 from common.utils.tracing_middleware import TracingMiddleware, log_error
@@ -34,7 +35,7 @@ class APIGatewayService(BaseService):
         )
 
     async def on_startup(self):
-        """Инициализация Telegram бота"""
+        """Инициализация Telegram бота с вебхуком"""
         global bot, dispatcher
 
         # Инициализация Telegram бота
@@ -43,22 +44,28 @@ class APIGatewayService(BaseService):
             dispatcher = Dispatcher()
             dispatcher.include_router(router)
 
-            # Удаляем webhook (на всякий случай)
+            # Устанавливаем webhook
+            webhook_url = config.webhook_url
             try:
-                await bot.delete_webhook()
-                self.logger.info("Telegram webhook removed")
+                await bot.set_webhook(
+                    url=webhook_url,
+                    drop_pending_updates=True
+                )
+                self.logger.info(f"Telegram webhook set to: {webhook_url}")
+                
+                # Получаем информацию о вебхуке для логирования
+                webhook_info = await bot.get_webhook_info()
+                self.logger.info(f"Webhook info: {webhook_info}")
+                
             except Exception as e:
-                self.logger.error(f"Failed to remove webhook: {e}")
+                self.logger.error(f"Failed to set webhook: {e}")
                 self.handle_error_response(
                     error=e,
-                    context={"operation": "webhook_cleanup", "bot_initialized": True}
+                    context={"operation": "webhook_setup", "bot_initialized": True}
                 )
+                raise
 
-            self.logger.info("Telegram bot initialized")
-
-            # Запускаем polling в фоне
-            polling_task = asyncio.create_task(dispatcher.start_polling(bot))
-            self.logger.info("Telegram polling started")
+            self.logger.info("Telegram bot initialized in webhook mode")
 
         else:
             self.logger.warning("TELEGRAM_TOKEN not provided, Telegram bot disabled")
@@ -66,16 +73,16 @@ class APIGatewayService(BaseService):
     async def on_shutdown(self):
         """Очистка ресурсов"""
         await service_client.close()
-        if bot and dispatcher:
+        if bot:
             try:
-                self.logger.info("Stopping Telegram polling...")
-                await dispatcher.stop_polling()
-                self.logger.info("Telegram polling stopped")
+                self.logger.info("Removing Telegram webhook...")
+                await bot.delete_webhook()
+                self.logger.info("Telegram webhook removed")
             except Exception as e:
-                self.logger.error(f"Failed to stop Telegram polling: {e}")
+                self.logger.error(f"Failed to remove webhook: {e}")
                 self.handle_error_response(
                     error=e,
-                    context={"operation": "polling_shutdown", "bot_initialized": True}
+                    context={"operation": "webhook_removal", "bot_initialized": True}
                 )
 
     async def check_dependencies(self):
@@ -86,7 +93,7 @@ class APIGatewayService(BaseService):
         if bot:
             try:
                 me = await bot.get_me()
-                dependencies_status["telegram"] = "polling_active" if me else "running"
+                dependencies_status["telegram"] = "webhook_active" if me else "running"
             except Exception:
                 dependencies_status["telegram"] = "running"
         else:
@@ -107,9 +114,7 @@ class APIGatewayService(BaseService):
         telegram_status = "disabled"
         if bot:
             try:
-                # Проверяем, что бот инициализирован
-                # В асинхронном контексте мы не можем вызвать bot.get_me() синхронно
-                telegram_status = "polling_active"
+                telegram_status = "webhook_active"
             except Exception:
                 telegram_status = "running"
 
@@ -132,34 +137,58 @@ service = APIGatewayService()
 app = service.app
 
 
+@app.post("/webhook")
+async def webhook_handler(request: Request):
+    """Обработчик вебхуков от Telegram"""
+    if not bot or not dispatcher:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Bot not initialized"
+        )
+    
+    try:
+        # Парсим обновление от Telegram
+        update_data = await request.json()
+        update = Update(**update_data)
+        
+        # Обрабатываем обновление
+        await dispatcher.feed_update(bot, update)
+        
+        return {"status": "ok"}
+    except Exception as e:
+        service.logger.error(f"Webhook processing error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing update: {e}"
+        )
 
 
 @app.get("/webhook-info")
 async def webhook_info():
-    """Информация о состоянии бота (polling режим)"""
+    """Информация о состоянии вебхука"""
     if not bot:
         return {"status": "bot_not_initialized"}
 
     try:
-        # Получаем информацию о боте
+        # Получаем информацию о боте и вебхуке
         me = await bot.get_me()
         webhook_info = await bot.get_webhook_info()
 
         return {
-            "mode": "polling",
+            "mode": "webhook",
             "bot_username": me.username,
             "bot_first_name": me.first_name,
-            "webhook_url": webhook_info.url or "none (polling mode)",
+            "webhook_url": webhook_info.url or "none",
             "webhook_pending_updates": webhook_info.pending_update_count,
+            "webhook_active": webhook_info.url is not None,
             "bot_active": True
         }
     except Exception as e:
         return {"error": str(e)}
 
 
-
-
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
