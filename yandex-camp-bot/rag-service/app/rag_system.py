@@ -471,4 +471,3 @@ class RAGSystem:
         logger.info("Documents reloaded")
 
 
-# ^_^
