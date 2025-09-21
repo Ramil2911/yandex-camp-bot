@@ -93,7 +93,7 @@ tasks:
                   --image cr.yandex/$REGISTRY_ID/$service:latest \
                   --service-account-id $SERVICE_ACCOUNT_ID \
                   --environment $ENV_VARS
-                  --network-name default
+                  --network-id enpuchvm6q14i7nvk8tq
               "
               echo "Finished deploying $service"
             done
@@ -134,5 +134,6 @@ tasks:
                 --image cr.yandex/$REGISTRY_ID/rag-service:latest \
                 --service-account-id $SERVICE_ACCOUNT_ID \
                 --environment $RAG_ENV_VARS
+                --network-id enpuchvm6q14i7nvk8tq
             "
             echo "Finished deploying rag-service"
