@@ -115,7 +115,7 @@ tasks:
                   --service-account-id $SERVICE_ACCOUNT_ID \\
                   --environment \"\$ENV_VARS\" \\
                   --network-id enpuchvm6q14i7nvk8tq \\
-                  --memory 512 MB \\
+                  --memory 512MB \\
                   --execution-timeout 45s \\
                   \$MIN_INSTANCES \\
                   --async
@@ -175,7 +175,7 @@ tasks:
                 --service-account-id $SERVICE_ACCOUNT_ID \\
                 --environment \"PYTHONPATH=/app:/app/common,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\" \\
                 --network-id enpuchvm6q14i7nvk8tq \\
-                --memory 512 MB \\
+                --memory 512MB \\
                 --execution-timeout 45s \\
                 --min-instances 1 \\
                 --async
