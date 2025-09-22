@@ -1258,4 +1258,58 @@ async def cleanup_old_logs(days: int = 30, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
 
+@app.get("/health")
+async def health_check():
+    """Проверка здоровья сервиса"""
+    database_status = "available" if db_initialized else "unavailable"
+    stats = {}
+    try:
+        # Получить базовую статистику
+        from .database import SessionLocal
+        db = SessionLocal()
+        total_logs = db.query(LogEntryDB).count()
+        stats = {"total_logs": total_logs}
+        db.close()
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+    return MonitoringHealthCheckResponse(
+        status="healthy" if database_status == "available" else "unhealthy",
+        service="monitoring-service",
+        timestamp="2024-01-01T00:00:00Z",  # В реальном проекте использовать datetime
+        database_status=database_status,
+        stats=stats
+    )
+
+@app.get("/")
+async def root():
+    """Информационная страница"""
+    return {
+        "service": "Monitoring Service",
+        "version": "1.0.0",
+        "description": "Сервис логирования и мониторинга микросервисов",
+        "endpoints": {
+            "create_log": "POST /logs",
+            "bulk_logs": "POST /logs/bulk",
+            "get_logs": "GET /logs",
+            "create_metrics": "POST /metrics",
+            "create_trace": "POST /traces",
+            "get_traces": "GET /traces",
+            "get_trace_by_id": "GET /trace/{trace_id}",
+            "get_full_trace": "GET /trace/{trace_id}/full",
+            "get_full_request_trace": "GET /request/{request_id}/full",
+            "create_error": "POST /errors",
+            "get_errors": "GET /errors",
+            "get_technical_errors": "GET /errors/technical",
+            "get_errors_stats": "GET /errors/stats",
+            "traces_count": "GET /metrics/traces/count",
+            "errors_count": "GET /metrics/errors/count",
+            "performance": "GET /metrics/performance",
+            "services_summary": "GET /metrics/services/summary",
+            "security_violations": "GET /security/violations",
+            "security_violations_stats": "GET /security/violations/stats",
+            "system_stats": "GET /stats",
+            "health": "GET /health",
+            "cleanup": "DELETE /logs/cleanup"
+        }
+    }
 
