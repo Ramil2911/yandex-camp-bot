@@ -47,6 +47,9 @@ tasks:
       DIALOGUE_SERVICE_URL: ${{ secrets.DIALOGUE_SERVICE_URL }}
       MONITORING_SERVICE_URL: ${{ secrets.MONITORING_SERVICE_URL }}
       WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+      GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
+      GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+      GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}
     cubes:
       - name: build-push-deploy-regular
         script: 
@@ -58,6 +61,28 @@ tasks:
             echo "" >> ~/.ssh/id_rsa
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
             
+            # Добавляем git pull перед деплоем
+            echo "Pulling latest changes from Git..."
+            ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
+              # Добавляем пути к yc и docker-credential-yc
+              export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
+              
+              # Переходим в директорию проекта и делаем pull
+              cd /home/yandexcamp/yandex-camp-bot && \
+              
+              # Настраиваем git credentials для этого репозитория
+              git config --global credential.helper 'store --file ~/.git-credentials' && \
+              echo 'https://$GIT_USERNAME:$GIT_TOKEN@$GIT_REPO_URL' > ~/.git-credentials && \
+              chmod 600 ~/.git-credentials && \
+              
+              # Делаем pull последних изменений
+              git pull origin master && \
+              echo 'Git pull completed successfully!' && \
+              
+              # Переходим в папку с проектом
+              cd yandex-camp-bot
+            "
+            
             services=("api-gateway" "monitoring-service" "dialogue-service" "security-service")
             
             for service in "${services[@]}"; do
@@ -67,18 +92,24 @@ tasks:
               case $service in
                 "api-gateway")
                   ENV_VARS="PYTHONPATH=/app:/app/common,TG_BOT_TOKEN=$TG_BOT_TOKEN,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,WEBHOOK_URL=$WEBHOOK_URL"
+                  # Для api-gateway добавляем min-instances 1
+                  MIN_INSTANCES="--min-instances 1"
                   ;;
                 "security-service")
                   ENV_VARS="PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL"
+                  MIN_INSTANCES=""
                   ;;
                 "dialogue-service")
                   ENV_VARS="PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,RAG_SERVICE_URL=$RAG_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL"
+                  MIN_INSTANCES=""
                   ;;
                 "monitoring-service")
                   ENV_VARS="PYTHONPATH=/app:/app/common,DATABASE_URL=$DATABASE_URL"
+                  MIN_INSTANCES=""
                   ;;
                 *)
                   ENV_VARS="PYTHONPATH=/app:/app/common"
+                  MIN_INSTANCES=""
                   ;;
               esac
               
@@ -93,7 +124,11 @@ tasks:
                   --image cr.yandex/$REGISTRY_ID/$service:latest \
                   --service-account-id $SERVICE_ACCOUNT_ID \
                   --environment $ENV_VARS \
-                  --network-id enpuchvm6q14i7nvk8tq
+                  --network-id enpuchvm6q14i7nvk8tq \
+                  --memory 512 \
+                  --execution-timeout 45s \
+                  $MIN_INSTANCES \
+                  --async
               "
               echo "Finished deploying $service"
             done
@@ -108,6 +143,9 @@ tasks:
       REGISTRY_ID: ${{ secrets.REGISTRY_ID }}
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
       MONITORING_SERVICE_URL: ${{ secrets.MONITORING_SERVICE_URL }}
+      GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
+      GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+      GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}
     cubes:
       - name: build-push-deploy-rag
         script: 
@@ -118,6 +156,28 @@ tasks:
             chmod 600 ~/.ssh/id_rsa
             echo "" >> ~/.ssh/id_rsa
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+            
+            # Добавляем git pull перед деплоем RAG сервиса
+            echo "Pulling latest changes from Git for RAG service..."
+            ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
+              # Добавляем пути к yc и docker-credential-yc
+              export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
+              
+              # Переходим в директорию проекта и делаем pull
+              cd /home/yandexcamp/yandex-camp-bot && \
+              
+              # Настраиваем git credentials
+              git config --global credential.helper 'store --file ~/.git-credentials' && \
+              echo 'https://$GIT_USERNAME:$GIT_TOKEN@$GIT_REPO_URL' > ~/.git-credentials && \
+              chmod 600 ~/.git-credentials && \
+              
+              # Делаем pull последних изменений
+              git pull origin master && \
+              echo 'Git pull completed successfully!' && \
+              
+              # Переходим в папку с проектом
+              cd yandex-camp-bot
+            "
             
             echo "Deploying rag-service..."
             # Переменные окружения для RAG сервиса
@@ -134,6 +194,10 @@ tasks:
                 --image cr.yandex/$REGISTRY_ID/rag-service:latest \
                 --service-account-id $SERVICE_ACCOUNT_ID \
                 --environment $RAG_ENV_VARS \
-                --network-id enpuchvm6q14i7nvk8tq
+                --network-id enpuchvm6q14i7nvk8tq \
+                --memory 512 \
+                --execution-timeout 45s \
+                --min-instances 1 \
+                --async
             "
             echo "Finished deploying rag-service"
