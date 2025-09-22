@@ -81,8 +81,6 @@ tasks:
               
               # Переходим в папку с проектом
               cd yandex-camp-bot
-            "
-            
             services=("api-gateway" "monitoring-service" "dialogue-service" "security-service")
             
             for service in "${services[@]}"; do
@@ -177,8 +175,6 @@ tasks:
               
               # Переходим в папку с проектом
               cd yandex-camp-bot
-            "
-            
             echo "Deploying rag-service..."
             # Переменные окружения для RAG сервиса
             RAG_ENV_VARS="PYTHONPATH=/app:/app/common,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL"
