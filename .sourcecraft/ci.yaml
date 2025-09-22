@@ -54,84 +54,77 @@ tasks:
       - name: build-push-deploy-regular
         script: 
           - |
-            # Настраиваем SSH в той же задаче
+            # Настраиваем SSH
             mkdir -p ~/.ssh
             echo "$SSH_KEY" > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
             echo "" >> ~/.ssh/id_rsa
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
             
-            # Добавляем git pull перед деплоем
-            echo "Pulling latest changes from Git..."
+            # Выполняем все в одной SSH сессии
             ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
-              # Добавляем пути к yc и docker-credential-yc
+              # Добавляем пути
               export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
               
-              # Переходим в директорию проекта и делаем pull
-              cd /home/yandexcamp/yandex-camp-bot && \
+              # Git pull
+              cd /home/yandexcamp/yandex-camp-bot
+              git config --global credential.helper 'store --file ~/.git-credentials'
+              echo 'https://$GIT_USERNAME:$GIT_TOKEN@$GIT_REPO_URL' > ~/.git-credentials
+              chmod 600 ~/.git-credentials
+              git pull origin master
+              echo 'Git pull completed successfully!'
               
-              # Настраиваем git credentials для этого репозитория
-              git config --global credential.helper 'store --file ~/.git-credentials' && \
-              echo 'https://$GIT_USERNAME:$GIT_TOKEN@$GIT_REPO_URL' > ~/.git-credentials && \
-              chmod 600 ~/.git-credentials && \
-              
-              # Делаем pull последних изменений
-              git pull origin master && \
-              echo 'Git pull completed successfully!' && \
-              
-              # Переходим в папку с проектом
+              # Переходим в папку проекта
               cd yandex-camp-bot
-            services=("api-gateway" "monitoring-service" "dialogue-service" "security-service")
-            
-            for service in "${services[@]}"; do
-              echo "Deploying $service..."
               
-              # Определяем переменные окружения для каждого сервиса
-              case $service in
-                "api-gateway")
-                  ENV_VARS="PYTHONPATH=/app:/app/common,TG_BOT_TOKEN=$TG_BOT_TOKEN,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,WEBHOOK_URL=$WEBHOOK_URL"
-                  # Для api-gateway добавляем min-instances 1
-                  MIN_INSTANCES="--min-instances 1"
-                  ;;
-                "security-service")
-                  ENV_VARS="PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL"
-                  MIN_INSTANCES=""
-                  ;;
-                "dialogue-service")
-                  ENV_VARS="PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,RAG_SERVICE_URL=$RAG_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL"
-                  MIN_INSTANCES=""
-                  ;;
-                "monitoring-service")
-                  ENV_VARS="PYTHONPATH=/app:/app/common,DATABASE_URL=$DATABASE_URL"
-                  MIN_INSTANCES=""
-                  ;;
-                *)
-                  ENV_VARS="PYTHONPATH=/app:/app/common"
-                  MIN_INSTANCES=""
-                  ;;
-              esac
+              # Деплоим сервисы
+              services=(\"api-gateway\" \"monitoring-service\" \"dialogue-service\" \"security-service\")
               
-              ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
-                # Добавляем пути к yc и docker-credential-yc
-                export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
-                cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
-                docker build -t cr.yandex/$REGISTRY_ID/$service:latest -f $service/Dockerfile . && \
-                docker push cr.yandex/$REGISTRY_ID/$service:latest && \
-                /home/yandexcamp/yandex-cloud/bin/yc serverless container revision deploy \
-                  --container-name $service \
-                  --image cr.yandex/$REGISTRY_ID/$service:latest \
-                  --service-account-id $SERVICE_ACCOUNT_ID \
-                  --environment $ENV_VARS \
-                  --network-id enpuchvm6q14i7nvk8tq \
-                  --memory 512 \
-                  --execution-timeout 45s \
-                  $MIN_INSTANCES \
+              for service in \"\${services[@]}\"; do
+                echo \"Deploying \$service...\"
+                
+                # Определяем переменные окружения для каждого сервиса
+                case \$service in
+                  \"api-gateway\")
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common,TG_BOT_TOKEN=$TG_BOT_TOKEN,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,WEBHOOK_URL=$WEBHOOK_URL\"
+                    MIN_INSTANCES=\"--min-instances 1\"
+                    ;;
+                  \"security-service\")
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\"
+                    MIN_INSTANCES=\"\"
+                    ;;
+                  \"dialogue-service\")
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,RAG_SERVICE_URL=$RAG_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\"
+                    MIN_INSTANCES=\"\"
+                    ;;
+                  \"monitoring-service\")
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common,DATABASE_URL=$DATABASE_URL\"
+                    MIN_INSTANCES=\"\"
+                    ;;
+                  *)
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common\"
+                    MIN_INSTANCES=\"\"
+                    ;;
+                esac
+                
+                docker build -t cr.yandex/$REGISTRY_ID/\$service:latest -f \$service/Dockerfile .
+                docker push cr.yandex/$REGISTRY_ID/\$service:latest
+                yc serverless container revision deploy \\
+                  --container-name \$service \\
+                  --image cr.yandex/$REGISTRY_ID/\$service:latest \\
+                  --service-account-id $SERVICE_ACCOUNT_ID \\
+                  --environment \"\$ENV_VARS\" \\
+                  --network-id enpuchvm6q14i7nvk8tq \\
+                  --memory 512 \\
+                  --execution-timeout 45s \\
+                  \$MIN_INSTANCES \\
                   --async
-              "
-              echo "Finished deploying $service"
-            done
-            
-            echo "Regular services deployed successfully!"
+                  
+                echo \"Finished deploying \$service\"
+              done
+              
+              echo \"Regular services deployed successfully!\"
+            "
 
   - name: deploy-rag-only
     env:
@@ -148,52 +141,44 @@ tasks:
       - name: build-push-deploy-rag
         script: 
           - |
-            # Настраиваем SSH в той же задаче
+            # Настраиваем SSH
             mkdir -p ~/.ssh
             echo "$SSH_KEY" > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
             echo "" >> ~/.ssh/id_rsa
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
             
-            # Добавляем git pull перед деплоем RAG сервиса
-            echo "Pulling latest changes from Git for RAG service..."
+            # Выполняем все в одной SSH сессии
             ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
-              # Добавляем пути к yc и docker-credential-yc
+              # Добавляем пути
               export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
               
-              # Переходим в директорию проекта и делаем pull
-              cd /home/yandexcamp/yandex-camp-bot && \
+              # Git pull
+              cd /home/yandexcamp/yandex-camp-bot
+              git config --global credential.helper 'store --file ~/.git-credentials'
+              echo 'https://$GIT_USERNAME:$GIT_TOKEN@$GIT_REPO_URL' > ~/.git-credentials
+              chmod 600 ~/.git-credentials
+              git pull origin master
+              echo 'Git pull completed successfully!'
               
-              # Настраиваем git credentials
-              git config --global credential.helper 'store --file ~/.git-credentials' && \
-              echo 'https://$GIT_USERNAME:$GIT_TOKEN@$GIT_REPO_URL' > ~/.git-credentials && \
-              chmod 600 ~/.git-credentials && \
-              
-              # Делаем pull последних изменений
-              git pull origin master && \
-              echo 'Git pull completed successfully!' && \
-              
-              # Переходим в папку с проектом
+              # Переходим в папку проекта
               cd yandex-camp-bot
-            echo "Deploying rag-service..."
-            # Переменные окружения для RAG сервиса
-            RAG_ENV_VARS="PYTHONPATH=/app:/app/common,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL"
-            
-            ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i ~/.ssh/id_rsa $SSH_USER@$SSH_HOST "
-              # Добавляем пути к yc и docker-credential-yc
-              export PATH=\$PATH:/home/yandexcamp/yandex-cloud/bin
-              cd /home/yandexcamp/yandex-camp-bot/yandex-camp-bot && \
-              docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile . && \
-              docker push cr.yandex/$REGISTRY_ID/rag-service:latest && \
-              /home/yandexcamp/yandex-cloud/bin/yc serverless container revision deploy \
-                --container-name rag-service \
-                --image cr.yandex/$REGISTRY_ID/rag-service:latest \
-                --service-account-id $SERVICE_ACCOUNT_ID \
-                --environment $RAG_ENV_VARS \
-                --network-id enpuchvm6q14i7nvk8tq \
-                --memory 512 \
-                --execution-timeout 45s \
-                --min-instances 1 \
+              
+              # Деплоим RAG сервис
+              echo \"Deploying rag-service...\"
+              
+              docker build -t cr.yandex/$REGISTRY_ID/rag-service:latest -f rag-service/Dockerfile .
+              docker push cr.yandex/$REGISTRY_ID/rag-service:latest
+              yc serverless container revision deploy \\
+                --container-name rag-service \\
+                --image cr.yandex/$REGISTRY_ID/rag-service:latest \\
+                --service-account-id $SERVICE_ACCOUNT_ID \\
+                --environment \"PYTHONPATH=/app:/app/common,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\" \\
+                --network-id enpuchvm6q14i7nvk8tq \\
+                --memory 512 \\
+                --execution-timeout 45s \\
+                --min-instances 1 \\
                 --async
+                
+              echo \"Finished deploying rag-service\"
             "
-            echo "Finished deploying rag-service"
