@@ -58,7 +58,7 @@ tasks:
             echo "" >> ~/.ssh/id_rsa
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
             
-            services=("api-gateway" "monitoring-service" "dialogue-service" "security-service")
+            services=("api-gateway" "monitoring-service" "dialogue-service" "security-service" "dashboard-service")
             
             for service in "${services[@]}"; do
               echo "Deploying $service..."
@@ -73,6 +73,9 @@ tasks:
                   ;;
                 "dialogue-service")
                   ENV_VARS="PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,RAG_SERVICE_URL=$RAG_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL"
+                  ;;
+                "dashboard-service")
+                  ENV_VARS="PYTHONPATH=/app:/app/common,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL"
                   ;;
                 "monitoring-service")
                   ENV_VARS="PYTHONPATH=/app:/app/common,DATABASE_URL=$DATABASE_URL"

@@ -78,12 +78,28 @@ services:
       dockerfile: monitoring-service/Dockerfile
     ports:
       - "8004:8004"
-      - "8501:8501"
     environment:
       - PYTHONPATH=/app:/app/common
       - DATABASE_URL=${DATABASE_URL}
     depends_on:
       - db
+    networks:
+      - yandex-camp-network
+
+  dashboard-service:
+    env_file: .env
+    build:
+      context: .
+      dockerfile: dashboard-service/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONPATH=/app:/app/common
+      - DATABASE_URL=${DATABASE_URL}
+      - MONITORING_SERVICE_URL=http://monitoring-service:8004
+    depends_on:
+      - db
+      - monitoring-service
     networks:
       - yandex-camp-network
 
