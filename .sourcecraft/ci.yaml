@@ -42,12 +42,16 @@ tasks:
       YC_OPENAI_TOKEN: ${{ secrets.YC_OPENAI_TOKEN }}
       YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      API_GATEWAY_URL: ${{ secrets.API_GATEWAY_URL }}
       SECURITY_SERVICE_URL: ${{ secrets.SECURITY_SERVICE_URL }}
       RAG_SERVICE_URL: ${{ secrets.RAG_SERVICE_URL }}
       DIALOGUE_SERVICE_URL: ${{ secrets.DIALOGUE_SERVICE_URL }}
       MONITORING_SERVICE_URL: ${{ secrets.MONITORING_SERVICE_URL }}
       WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
       BOT_MODE: ${{ secrets.BOT_MODE }}
+      SERVICE_ACCOUNTS_ENABLED: ${{ secrets.SERVICE_ACCOUNTS_ENABLED }}
+      SERVICE_ACCOUNT_IDS: ${{ secrets.SERVICE_ACCOUNT_IDS }}
       GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
       GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
       GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}
@@ -87,19 +91,19 @@ tasks:
                 # Определяем переменные окружения для каждого сервиса
                 case \$service in
                   \"api-gateway\")
-                    ENV_VARS="PYTHONPATH=/app:/app/common,TG_BOT_TOKEN=$TG_BOT_TOKEN,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,WEBHOOK_URL=$WEBHOOK_URL,BOT_MODE=$BOT_MODE"
+                    ENV_VARS="PYTHONPATH=/app:/app/common,TG_BOT_TOKEN=$TG_BOT_TOKEN,API_GATEWAY_URL=$API_GATEWAY_URL,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,WEBHOOK_URL=$WEBHOOK_URL,BOT_MODE=$BOT_MODE,SERVICE_ACCOUNTS_ENABLED=$SERVICE_ACCOUNTS_ENABLED,SERVICE_ACCOUNT_IDS=$SERVICE_ACCOUNT_IDS"
                     MIN_INSTANCES=\"--min-instances 1\"
                     ;;
                   \"security-service\")
-                    ENV_VARS=\"PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\"
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,API_GATEWAY_URL=$API_GATEWAY_URL\"
                     MIN_INSTANCES=\"\"
                     ;;
                   \"dialogue-service\")
-                    ENV_VARS=\"PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,RAG_SERVICE_URL=$RAG_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\"
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common,YC_OPENAI_TOKEN=$YC_OPENAI_TOKEN,YC_FOLDER_ID=$YC_FOLDER_ID,RAG_SERVICE_URL=$RAG_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,API_GATEWAY_URL=$API_GATEWAY_URL\"
                     MIN_INSTANCES=\"\"
                     ;;
                   \"monitoring-service\")
-                    ENV_VARS=\"PYTHONPATH=/app:/app/common,DATABASE_URL=$DATABASE_URL\"
+                    ENV_VARS=\"PYTHONPATH=/app:/app/common,DATABASE_URL=$DATABASE_URL,REDIS_URL=$REDIS_URL,API_GATEWAY_URL=$API_GATEWAY_URL\"
                     MIN_INSTANCES=\"\"
                     ;;
                   *)
@@ -134,6 +138,7 @@ tasks:
       SSH_KEY: ${{ secrets.SSH_KEY }}
       REGISTRY_ID: ${{ secrets.REGISTRY_ID }}
       SERVICE_ACCOUNT_ID: ${{ secrets.SERVICE_ACCOUNT_ID }}
+      API_GATEWAY_URL: ${{ secrets.API_GATEWAY_URL }}
       MONITORING_SERVICE_URL: ${{ secrets.MONITORING_SERVICE_URL }}
       GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
       GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
@@ -174,7 +179,7 @@ tasks:
                 --container-name rag-service \\
                 --image cr.yandex/$REGISTRY_ID/rag-service:latest \\
                 --service-account-id $SERVICE_ACCOUNT_ID \\
-                --environment \"PYTHONPATH=/app:/app/common,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\" \\
+                --environment \"PYTHONPATH=/app:/app/common,API_GATEWAY_URL=$API_GATEWAY_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL\" \\
                 --network-id enpuchvm6q14i7nvk8tq \\
                 --memory 512MB \\
                 --execution-timeout 45s \\

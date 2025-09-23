@@ -4,7 +4,29 @@ from pydantic_settings import BaseSettings
 
 
 class Config(BaseSettings):
-    """Единые настройки для всех микросервисов"""
+    """
+    Единые настройки для всех микросервисов.
+
+    Переменные окружения:
+    - YC_OPENAI_TOKEN: Токен для Yandex Cloud OpenAI
+    - YC_FOLDER_ID: ID папки в Yandex Cloud
+    - TG_BOT_TOKEN: Токен Telegram бота
+
+    - DATABASE_URL: URL базы данных для monitoring service
+    - REDIS_URL: URL Redis
+
+    - API_GATEWAY_URL: URL API Gateway
+    - SECURITY_SERVICE_URL: URL Security Service
+    - RAG_SERVICE_URL: URL RAG Service
+    - DIALOGUE_SERVICE_URL: URL Dialogue Service
+    - MONITORING_SERVICE_URL: URL Monitoring Service
+
+    - WEBHOOK_URL: URL для Telegram webhook
+    - BOT_MODE: Режим работы бота (polling/webhook)
+
+    - SERVICE_ACCOUNTS_ENABLED: Включить сервисные аккаунты (true/false)
+    - SERVICE_ACCOUNT_IDS: Список Telegram user_id через запятую
+    """
 
     # API Keys
     yc_openai_token: str = os.getenv("YC_OPENAI_TOKEN", "")
@@ -15,6 +37,7 @@ class Config(BaseSettings):
     database_url: str = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/monitoring")
 
     # Service URLs
+    api_gateway_url: str = os.getenv("API_GATEWAY_URL", "http://api-gateway:8000")
     security_service_url: str = os.getenv("SECURITY_SERVICE_URL", "http://security-service:8001")
     rag_service_url: str = os.getenv("RAG_SERVICE_URL", "http://rag-service:8002")
     dialogue_service_url: str = os.getenv("DIALOGUE_SERVICE_URL", "http://dialogue-service:8003")
@@ -27,6 +50,10 @@ class Config(BaseSettings):
     webhook_url: str = os.getenv("WEBHOOK_URL", "")
     webhook_path: str = "/webhook"
     bot_mode: str = os.getenv("BOT_MODE", "polling")  # polling or webhook
+
+    # Service accounts (для API Gateway)
+    service_accounts_enabled: bool = os.getenv("SERVICE_ACCOUNTS_ENABLED", "false").lower() == "true"
+    service_account_ids: str = os.getenv("SERVICE_ACCOUNT_IDS", "")
 
     # Data directories (для RAG service)
     data_directory: str = "/app/data"
@@ -165,6 +192,7 @@ class Config(BaseSettings):
 Доступные команды:
 /clear - очистить память разговора
 /help - показать справку
+/history - показать историю сообщений
 /stats - показать статистику бота
 /rag - показать статус RAG системы""",
 
@@ -174,6 +202,7 @@ class Config(BaseSettings):
 /start - начать работу
 /clear - очистить память разговора
 /help - показать эту справку
+/history - показать историю сообщений
 /stats - показать статистику бота
 /rag - показать статус RAG системы
 

@@ -137,6 +137,9 @@ class ServiceHTTPClient:
         """Проверка безопасности через Security Service"""
         try:
             headers = self._get_trace_headers(request.user_id, request.session_id)
+            # Добавляем request_id в заголовки для отслеживания времени
+            if hasattr(request, 'request_id'):
+                headers["X-Request-Id"] = request.request_id
             response = await self.request(
                 "POST",
                 f"{config.security_service_url}/moderate",
@@ -154,6 +157,9 @@ class ServiceHTTPClient:
         """Поиск в RAG системе"""
         try:
             headers = self._get_trace_headers(request.user_id, request.session_id)
+            # Добавляем request_id в заголовки для отслеживания времени
+            if hasattr(request, 'request_id') and request.request_id:
+                headers["X-Request-Id"] = request.request_id
             response = await self.request(
                 "POST",
                 f"{config.rag_service_url}/search",
@@ -178,6 +184,9 @@ class ServiceHTTPClient:
         """Обработка диалога через Dialogue Service"""
         try:
             headers = self._get_trace_headers(request.user_id, request.session_id)
+            # Добавляем request_id в заголовки для отслеживания времени
+            if hasattr(request, 'request_id') and request.request_id:
+                headers["X-Request-Id"] = request.request_id
             response = await self.request(
                 "POST",
                 f"{config.dialogue_service_url}/dialogue",

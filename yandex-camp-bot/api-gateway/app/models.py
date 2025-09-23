@@ -3,7 +3,8 @@ from typing import Optional, Dict, Any, List
 from common.models import (
     LogEntry, HealthCheckResponse,
     TelegramMessage, SecurityCheckRequest, SecurityCheckResponse,
-    DialogueRequest, DialogueResponse, RAGSearchRequest, RAGSearchResponse
+    DialogueRequest, DialogueResponse, RAGSearchRequest, RAGSearchResponse,
+    ServiceAccount, ServiceMetrics
 )
 
 

@@ -76,6 +76,7 @@ class RAGSearchRequest(BaseModel):
     query: str
     user_id: str
     session_id: str
+    request_id: Optional[str] = None
 
 
 class DocumentInfo(BaseModel):
@@ -134,6 +135,7 @@ class SecurityCheckRequest(BaseModel):
     message: str
     user_id: str
     session_id: str
+    request_id: Optional[str] = None
 
 
 class ModeratorVerdict(BaseModel):
@@ -175,6 +177,7 @@ class DialogueRequest(BaseModel):
     user_id: str
     session_id: str
     context: Optional[Dict[str, Any]] = None
+    request_id: Optional[str] = None
 
 
 class DialogueResponse(BaseModel):
@@ -223,3 +226,23 @@ class DialogueStats(BaseModel):
     average_response_time: float
     active_sessions: int
     total_tokens_used: int
+
+
+class ServiceAccount(BaseModel):
+    """Сервисный аккаунт для получения метрик времени обработки"""
+    account_id: str
+    name: str
+    description: Optional[str] = None
+    enabled: bool = True
+    created_at: Optional[datetime] = None
+
+
+class ServiceMetrics(BaseModel):
+    """Метрики времени обработки для сервисного аккаунта"""
+    request_id: str
+    user_id: str
+    session_id: str
+    timestamp: datetime
+    services_timing: Dict[str, float]  # service_name -> processing_time_seconds
+    total_time: float
+    status: str  # "success", "error", "partial_error"

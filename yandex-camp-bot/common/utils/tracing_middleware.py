@@ -10,7 +10,7 @@ import httpx
 from datetime import datetime
 
 from common.config import config
-from common.models.common import TraceEntry, ErrorEntry
+from common.models.common import TraceEntry, ErrorEntry, ServiceMetrics
 
 
 class MonitoringClient:
@@ -184,6 +184,120 @@ class MonitoringClient:
 monitoring_client = MonitoringClient()
 
 
+class ServiceTimingTracker:
+    """Класс для отслеживания времени обработки запросов в сервисах"""
+
+    def __init__(self, service_name: str):
+        self.service_name = service_name
+        self._timings = {}  # request_id -> timing_data
+
+    def start_request(self, request_id: str, user_id: str = None, session_id: str = None, expected_services: list = None):
+        """Начать отслеживание времени для нового запроса"""
+        if request_id not in self._timings:
+            self._timings[request_id] = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "start_time": time.time(),
+                "services": {},
+                "expected_services": expected_services or ["security-service", "rag-service", "dialogue-service"],
+                "status": "running",
+                "completed_services": set()
+            }
+
+    def start_service_timing(self, request_id: str, service_name: str):
+        """Начать отслеживание времени для конкретного сервиса"""
+        if request_id in self._timings:
+            if service_name not in self._timings[request_id]["services"]:
+                self._timings[request_id]["services"][service_name] = {
+                    "start_time": time.time(),
+                    "end_time": None,
+                    "duration": None
+                }
+
+    def end_service_timing(self, request_id: str, service_name: str, status: str = "success"):
+        """Закончить отслеживание времени для конкретного сервиса"""
+        if request_id in self._timings:
+            if service_name in self._timings[request_id]["services"]:
+                service_data = self._timings[request_id]["services"][service_name]
+                service_data["end_time"] = time.time()
+                service_data["duration"] = service_data["end_time"] - service_data["start_time"]
+
+                # Добавляем в список завершенных сервисов
+                self._timings[request_id]["completed_services"].add(service_name)
+
+                # Проверяем, все ли ожидаемые сервисы завершили обработку
+                expected_services = set(self._timings[request_id]["expected_services"])
+                completed_services = self._timings[request_id]["completed_services"]
+
+                if expected_services.issubset(completed_services):
+                    # Все сервисы завершили работу
+                    self._timings[request_id]["status"] = status
+                    self._timings[request_id]["end_time"] = time.time()
+                    self._timings[request_id]["total_duration"] = (
+                        self._timings[request_id]["end_time"] - self._timings[request_id]["start_time"]
+                    )
+
+                    # Отправляем метрики сервисным аккаунтам
+                    self._send_service_metrics(request_id)
+
+    def _send_service_metrics(self, request_id: str):
+        """Отправить метрики времени сервисным аккаунтам"""
+        timing_data = self._timings.get(request_id)
+        if not timing_data or timing_data["status"] == "running":
+            return
+
+        services_timing = {}
+        for service_name, service_data in timing_data["services"].items():
+            if service_data["duration"] is not None:
+                services_timing[service_name] = service_data["duration"]
+
+        metrics = ServiceMetrics(
+            request_id=request_id,
+            user_id=timing_data["user_id"],
+            session_id=timing_data["session_id"],
+            timestamp=datetime.utcnow(),
+            services_timing=services_timing,
+            total_time=timing_data["total_duration"],
+            status=timing_data["status"]
+        )
+
+        # Отправляем метрики в API Gateway для рассылки сервисным аккаунтам
+        self._send_to_api_gateway_sync(metrics)
+
+        # Очищаем данные после отправки
+        del self._timings[request_id]
+
+    def _send_to_api_gateway_sync(self, metrics: ServiceMetrics):
+        """Отправить метрики в API Gateway (синхронно)"""
+        try:
+            import requests
+            response = requests.post(
+                f"{config.api_gateway_url or 'http://api-gateway:8000'}/service-metrics",
+                json=serialize_for_json(metrics.dict()),
+                timeout=5.0
+            )
+            if response.status_code != 200:
+                logger.error(f"Failed to send metrics, status: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Failed to send service metrics: {e}")
+
+    async def _send_to_api_gateway(self, metrics: ServiceMetrics):
+        """Отправить метрики в API Gateway (асинхронно)"""
+        try:
+            client = httpx.AsyncClient(timeout=5.0)
+            response = await client.post(
+                f"{config.api_gateway_url or 'http://api-gateway:8000'}/service-metrics",
+                json=serialize_for_json(metrics.dict())
+            )
+            await client.aclose()
+        except Exception as e:
+            logger.error(f"Failed to send service metrics: {e}")
+
+
+# Глобальный трекер времени
+service_timing_tracker = ServiceTimingTracker("global")
+
+
 def log_error(service: str, error_type: str, error_message: str,
               user_id: Optional[str] = None, session_id: Optional[str] = None,
               context: Optional[Dict[str, Any]] = None,
@@ -262,6 +376,7 @@ class TracingMiddleware:
     def __init__(self, service_name: str):
         self.service_name = service_name
         self.monitoring_client = MonitoringClient(service_name)
+        self.timing_tracker = ServiceTimingTracker(service_name)
 
     async def __call__(self, request: Request, call_next: Callable) -> Response:
         # Для monitoring-service отключаем трейсинг полностью, чтобы избежать бесконечного цикла
@@ -285,6 +400,10 @@ class TracingMiddleware:
         # Извлекаем контекст пользователя
         user_id = request.headers.get("X-User-Id")
         session_id = request.headers.get("X-Session-Id")
+
+        # Начинаем отслеживание времени для запроса
+        self.timing_tracker.start_request(request_id, user_id, session_id)
+        self.timing_tracker.start_service_timing(request_id, self.service_name)
 
         start_time = time.time()
         start_datetime = datetime.utcnow()
@@ -324,6 +443,9 @@ class TracingMiddleware:
             end_datetime = datetime.utcnow()
             duration = end_time - start_time
 
+            # Завершаем отслеживание времени для этого сервиса
+            self.timing_tracker.end_service_timing(request_id, self.service_name, "success")
+
             if should_trace:
                 success_trace = TraceEntry(
                     trace_id=trace_id,
@@ -356,6 +478,9 @@ class TracingMiddleware:
             end_time = time.time()
             end_datetime = datetime.utcnow()
             duration = end_time - start_time
+
+            # Завершаем отслеживание времени для этого сервиса с ошибкой
+            self.timing_tracker.end_service_timing(request_id, self.service_name, "error")
 
             if should_trace:
                 # Создаем запись об ошибке с тем же trace_id и request_id

@@ -1,5 +1,6 @@
 import logging
 import asyncio
+from datetime import datetime
 from aiogram import Router, Bot
 from aiogram.types import Message
 from aiogram.filters import Command
@@ -171,21 +172,52 @@ async def handle_message(message: Message, bot: Bot):
         username = message.from_user.username or "unknown"
         message_text = message.text.strip()
 
+        # Проверяем на специальные маркеры для игнорирования
+        from .main import service
+
+        # Игнорируем сообщения-метрики (содержат специальный маркер)
+        if message_text.startswith("🤖 **[SERVICE METRICS]**"):
+            logger.info(f"Ignoring service metrics message from user: {user_id}")
+            return
+
+        # Также игнорируем сообщения от самого бота (если вдруг)
+        try:
+            me = await bot.get_me()
+            if me and str(me.id) == user_id:
+                logger.info(f"Ignoring message from bot itself: {user_id}")
+                return
+        except Exception:
+            pass  # Игнорируем ошибки при получении информации о боте
+
+        # Сервисные аккаунты МОГУТ взаимодействовать как обычные пользователи для тестирования
+
         if not message_text:
             await message.reply(config.bot_messages["empty_message"])
             return
+
+        # Генерируем request_id для отслеживания времени обработки
+        import uuid
+        import time
+        from common.utils.tracing_middleware import service_timing_tracker
+
+        request_id = f"req-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+
+        # Начинаем глобальное отслеживание времени для этого запроса
+        service_timing_tracker.start_request(request_id, user_id, session_id)
 
         # 1. Параллельно выполняем проверку безопасности и RAG поиск (оптимизация для serverless)
         security_request = SecurityCheckRequest(
             message=message_text,
             user_id=user_id,
-            session_id=session_id
+            session_id=session_id,
+            request_id=request_id
         )
 
         rag_request = RAGSearchRequest(
             query=message_text,
             user_id=user_id,
-            session_id=session_id
+            session_id=session_id,
+            request_id=request_id
         )
 
         # Выполняем security и RAG параллельно для ускорения
@@ -240,7 +272,8 @@ async def handle_message(message: Message, bot: Bot):
             context={
                 "rag_context": rag_response.context,
                 "documents_found": rag_response.documents_found
-            }
+            },
+            request_id=request_id
         )
 
         dialogue_response = await service_client.process_dialogue(dialogue_request)

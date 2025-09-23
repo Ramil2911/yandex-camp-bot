@@ -2,6 +2,7 @@ import logging
 import asyncio
 import time
 import json
+import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher
@@ -11,7 +12,7 @@ from common.utils.tracing_middleware import TracingMiddleware, log_error
 from common.utils import BaseService
 from .telegram_handlers import router
 from .client import service_client
-from .models import APIGatewayHealthCheckResponse, LogEntry
+from .models import APIGatewayHealthCheckResponse, LogEntry, ServiceAccount, ServiceMetrics
 
 # Глобальные переменные для Telegram бота
 bot = None
@@ -35,15 +36,26 @@ class APIGatewayService(BaseService):
             }
         )
 
+        # Инициализация словаря сервисных аккаунтов
+        self.service_accounts = {}  # account_id -> ServiceAccount
+
+        # Инициализация Telegram бота (атрибуты экземпляра для лучшей инкапсуляции)
+        self.bot = None
+        self.dispatcher = None
+
     async def on_startup(self):
         """Инициализация Telegram бота"""
         global bot, dispatcher
 
         # Инициализация Telegram бота
         if config.telegram_token:
-            bot = Bot(token=config.telegram_token)
-            dispatcher = Dispatcher()
-            dispatcher.include_router(router)
+            self.bot = Bot(token=config.telegram_token)
+            self.dispatcher = Dispatcher()
+            self.dispatcher.include_router(router)
+
+            # Синхронизируем с глобальными переменными для совместимости
+            bot = self.bot
+            dispatcher = self.dispatcher
 
             self.logger.info("Telegram bot initialized")
 
@@ -63,6 +75,66 @@ class APIGatewayService(BaseService):
 
         else:
             self.logger.warning("TELEGRAM_TOKEN not provided, Telegram bot disabled")
+
+        # Инициализация сервисных аккаунтов
+        await self._init_service_accounts()
+
+    async def _init_service_accounts(self):
+        """
+        Инициализация сервисных аккаунтов из конфигурации.
+
+        Сервисные аккаунты настраиваются ТОЛЬКО через переменные окружения
+        и не могут быть изменены во время выполнения.
+
+        Переменные окружения:
+        - SERVICE_ACCOUNTS_ENABLED=true/false - включить/выключить сервисные аккаунты
+        - SERVICE_ACCOUNT_IDS=123456789,987654321 - список Telegram user_id через запятую
+
+        Пример:
+        SERVICE_ACCOUNTS_ENABLED=true
+        SERVICE_ACCOUNT_IDS=123456789,987654321
+        """
+        from datetime import datetime
+
+        # Проверяем, включены ли сервисные аккаунты
+        if not config.service_accounts_enabled:
+            self.logger.info("Service accounts are disabled")
+            return
+
+        # Получаем список user_id сервисных аккаунтов из конфигурации
+        if not config.service_account_ids:
+            self.logger.info("No service account IDs configured")
+            return
+
+        try:
+            # Формат: "123456789,987654321,555666777" (список Telegram user_id)
+            account_ids = [id.strip() for id in config.service_account_ids.split(",") if id.strip()]
+
+            for account_id in account_ids:
+                # Валидация: user_id должен быть числом (Telegram ID)
+                if not account_id.isdigit():
+                    self.logger.warning(f"Invalid service account ID (must be numeric): {account_id}")
+                    continue
+
+                account = ServiceAccount(
+                    account_id=account_id,
+                    name=f"Service Account {account_id}",
+                    description=f"Сервисный аккаунт для мониторинга метрик (ID: {account_id})",
+                    enabled=True,
+                    created_at=datetime.utcnow()
+                )
+                self.service_accounts[account_id] = account
+                self.logger.info(f"Initialized service account: {account_id}")
+
+            # Подсчитываем успешно инициализированные аккаунты
+            enabled_accounts = len([a for a in self.service_accounts.values() if a.enabled])
+            if enabled_accounts > 0:
+                self.logger.info(f"Successfully initialized {enabled_accounts} service accounts")
+            else:
+                self.logger.warning("No service accounts were initialized - check SERVICE_ACCOUNT_IDS format")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize service accounts: {e}")
 
     async def _setup_webhook_mode(self):
         """Настройка режима webhook"""
@@ -173,6 +245,63 @@ class APIGatewayService(BaseService):
             }
         )
 
+    def get_service_accounts(self):
+        """Получить все сервисные аккаунты (только для чтения)"""
+        return list(self.service_accounts.values())
+
+    async def send_metrics_to_service_accounts(self, metrics: ServiceMetrics):
+        """Отправить метрики сервисным аккаунтам"""
+        if not self.bot:
+            self.logger.warning("Bot not initialized, cannot send metrics to service accounts")
+            return
+
+        # Проверяем, есть ли активные сервисные аккаунты
+        active_accounts = [acc for acc in self.service_accounts.values() if acc.enabled]
+        if not active_accounts:
+            self.logger.debug("No active service accounts configured")
+            return
+
+        message_parts = [
+            "🤖 **[SERVICE METRICS]**\n",  # Маркер для идентификации сообщений метрик
+            "📊 **Метрики обработки запроса**\n",
+            f"🆔 Request ID: `{metrics.request_id}`\n",
+            f"👤 User ID: `{metrics.user_id or 'unknown'}`\n",
+            f"💬 Session ID: `{metrics.session_id or 'unknown'}`\n",
+            f"⏱️ Общее время: `{metrics.total_time:.2f} сек`\n",
+            f"📈 Статус: `{metrics.status}`\n\n",
+            "**Время по сервисам:**\n"
+        ]
+
+        # Для сервисных аккаунтов добавляем дополнительную информацию
+        if active_accounts:  # Если есть активные сервисные аккаунты
+            message_parts.append("\n💡 *Как сервисный аккаунт вы можете:*\n")
+            message_parts.append("• Отправлять тестовые сообщения боту\n")
+            message_parts.append("• Получать детальные метрики обработки\n")
+            message_parts.append("• Тестировать функциональность системы\n")
+
+        for service_name, duration in metrics.services_timing.items():
+            message_parts.append(f"🔹 {service_name}: `{duration:.2f} сек`\n")
+
+        message = "".join(message_parts)
+
+        # Отправляем сообщение всем активным сервисным аккаунтам
+        sent_count = 0
+        failed_count = 0
+        for account in active_accounts:
+            try:
+                await self.bot.send_message(
+                    chat_id=int(account.account_id),
+                    text=message,
+                    parse_mode="Markdown"
+                )
+                sent_count += 1
+                self.logger.debug(f"Metrics sent to service account {account.account_id}")
+            except Exception as e:
+                failed_count += 1
+                self.logger.error(f"Failed to send metrics to service account {account.account_id}: {e}")
+
+        self.logger.info(f"Metrics sent to {sent_count} service accounts, {failed_count} failed")
+
 
 # Создаем экземпляр сервиса
 service = APIGatewayService()
@@ -207,6 +336,19 @@ async def webhook_handler(request: Request):
             update_type = "message"
             user_id = str(update.message.from_user.id) if update.message.from_user else None
             session_id = str(update.message.chat.id) if update.message.chat else None
+
+            # Проверяем на специальные случаи для игнорирования
+            if user_id:
+                # Игнорируем сообщения от самого бота
+                try:
+                    me = await bot.get_me()
+                    if me and str(me.id) == user_id:
+                        service.logger.info(f"Ignoring webhook from bot itself: {user_id}")
+                        return {"status": "ignored", "reason": "bot_itself"}
+                except Exception:
+                    pass  # Игнорируем ошибки при получении информации о боте
+
+                # NOTE: Сервисные аккаунты теперь МОГУТ отправлять сообщения для тестирования
         elif update.callback_query:
             update_type = "callback_query"
             user_id = str(update.callback_query.from_user.id) if update.callback_query.from_user else None
@@ -324,6 +466,13 @@ async def webhook_info():
         return {"error": str(e)}
 
 
+# API для приема метрик от сервисов
+@app.post("/service-metrics")
+async def receive_service_metrics(metrics: ServiceMetrics):
+    """Получить метрики от сервисов и отправить сервисным аккаунтам"""
+    # Этот endpoint не требует аутентификации, так как вызывается внутренними сервисами
+    await service.send_metrics_to_service_accounts(metrics)
+    return {"message": "Metrics sent to service accounts"}
 
 
 if __name__ == "__main__":
