@@ -87,7 +87,7 @@ tasks:
                 # Определяем переменные окружения для каждого сервиса
                 case \$service in
                   \"api-gateway\")
-                    ENV_VARS=\"PYTHONPATH=/app:/app/common,TG_BOT_TOKEN=$TG_BOT_TOKEN,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,WEBHOOK_URL=$WEBHOOK_URL\"
+                    ENV_VARS="PYTHONPATH=/app:/app/common,TG_BOT_TOKEN=$TG_BOT_TOKEN,SECURITY_SERVICE_URL=$SECURITY_SERVICE_URL,RAG_SERVICE_URL=$RAG_SERVICE_URL,DIALOGUE_SERVICE_URL=$DIALOGUE_SERVICE_URL,MONITORING_SERVICE_URL=$MONITORING_SERVICE_URL,WEBHOOK_URL=$WEBHOOK_URL,BOT_MODE=$BOT_MODE"
                     MIN_INSTANCES=\"--min-instances 1\"
                     ;;
                   \"security-service\")
