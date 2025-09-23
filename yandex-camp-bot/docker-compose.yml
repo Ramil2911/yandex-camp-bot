@@ -15,7 +15,7 @@ services:
       - RAG_SERVICE_URL=http://rag-service:8002
       - DIALOGUE_SERVICE_URL=http://dialogue-service:8003
       - MONITORING_SERVICE_URL=http://monitoring-service:8004
-      - WEBHOOK_URL=
+      - WEBHOOK_URL=${WEBHOOK_URL}
     depends_on:
       - security-service
       - rag-service

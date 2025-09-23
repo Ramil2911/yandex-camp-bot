@@ -26,6 +26,7 @@ class Config(BaseSettings):
     # Webhook settings (для API Gateway)
     webhook_url: str = os.getenv("WEBHOOK_URL", "")
     webhook_path: str = "/webhook"
+    bot_mode: str = os.getenv("BOT_MODE", "polling")  # polling or webhook
 
     # Data directories (для RAG service)
     data_directory: str = "/app/data"
