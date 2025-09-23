@@ -47,6 +47,7 @@ tasks:
       DIALOGUE_SERVICE_URL: ${{ secrets.DIALOGUE_SERVICE_URL }}
       MONITORING_SERVICE_URL: ${{ secrets.MONITORING_SERVICE_URL }}
       WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+      BOT_MODE: ${{ secrets.BOT_MODE }}
       GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
       GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
       GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}
