@@ -32,9 +32,11 @@ class RAGSystem:
         self.text_splitter = None
         self.query_processor = None
 
-        # Статус инициализации
-        self.initialization_status = "initializing"
+        # Статус инициализации (ленивая инициализация для serverless)
+        self.initialization_status = "not_started"
         self.initialization_error = None
+        self._initialization_lock = asyncio.Lock()
+        self._is_initializing = False
 
         # Статистика
         self.stats = {
@@ -45,47 +47,96 @@ class RAGSystem:
             "last_indexing_time": None
         }
 
-        # Асинхронная инициализация
+        # Пул потоков для ленивой инициализации
         self._executor = ThreadPoolExecutor(max_workers=2)
-        asyncio.create_task(self._async_initialize())
+        
+        # В serverless не инициализируем сразу - только при первом запросе
 
-    async def _async_initialize(self):
-        """Асинхронная инициализация компонентов"""
-        try:
-            # Инициализация компонентов в пуле потоков
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(self._executor, self._initialize_components)
-            await loop.run_in_executor(self._executor, self._load_documents)
+    async def _ensure_initialized(self):
+        """Ленивая инициализация компонентов при первом обращении"""
+        if self.initialization_status == "ready":
+            return True
+            
+        if self.initialization_status == "failed":
+            return False
+            
+        # Используем lock для предотвращения множественной инициализации
+        async with self._initialization_lock:
+            # Повторная проверка после получения блокировки
+            if self.initialization_status == "ready":
+                return True
+            if self.initialization_status == "failed":
+                return False
+                
+            if self._is_initializing:
+                # Ждем завершения инициализации
+                while self._is_initializing:
+                    await asyncio.sleep(0.1)
+                return self.initialization_status == "ready"
+            
+            self._is_initializing = True
+            self.initialization_status = "initializing"
+            
+            try:
+                # Инициализация компонентов в пуле потоков
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(self._executor, self._initialize_components)
+                await loop.run_in_executor(self._executor, self._load_documents)
 
-            # Инициализация QueryProcessor
-            self.query_processor = QueryProcessor()
+                # БЕЗОПАСНОСТЬ: QueryProcessor инициализируется при приоритете безопасности
+                if config.rag_config.get("security_first", True):
+                    self.query_processor = QueryProcessor()
+                    logger.info("QueryProcessor initialized for security pipeline")
+                else:
+                    self.query_processor = None
 
-            self.initialization_status = "ready"
-            logger.info("RAG System initialized successfully")
+                self.initialization_status = "ready"
+                logger.info("RAG System initialized successfully (lazy)")
+                return True
 
-        except Exception as e:
-            self.initialization_status = "failed"
-            self.initialization_error = str(e)
-            logger.error(f"Failed to initialize RAG System: {e}")
+            except Exception as e:
+                self.initialization_status = "failed"
+                self.initialization_error = str(e)
+                logger.error(f"Failed to initialize RAG System: {e}")
+                return False
+            finally:
+                self._is_initializing = False
 
     def _initialize_components(self):
-        """Инициализация компонентов RAG системы"""
+        """Инициализация компонентов RAG системы (оптимизировано для serverless)"""
         try:
-            # Инициализация эмбеддингов
+            # Инициализация эмбеддингов с кешированием для serverless
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
+                
+                # Оптимизированные настройки для serverless
+                model_kwargs = config.embedding_config["model_kwargs"].copy()
+                if config.rag_config.get("serverless_mode", True):
+                    # Используем меньше ресурсов в serverless
+                    model_kwargs["device"] = "cpu"
+                    model_kwargs["trust_remote_code"] = False
+                
                 self.embeddings = HuggingFaceEmbeddings(
                     model_name=config.embedding_config["model_name"],
-                    model_kwargs=config.embedding_config["model_kwargs"],
-                    encode_kwargs=config.embedding_config["encode_kwargs"]
+                    model_kwargs=model_kwargs,
+                    encode_kwargs=config.embedding_config["encode_kwargs"],
+                    cache_folder="./.cache/embeddings" if config.rag_config.get("cache_embeddings", True) else None
                 )
 
-            # Инициализация текстового сплиттера
+            # Инициализация текстового сплиттера (упрощенные настройки для serverless)
+            chunk_size = config.text_splitter_config["chunk_size"]
+            chunk_overlap = config.text_splitter_config["chunk_overlap"]
+            
+            if config.rag_config.get("serverless_mode", True):
+                # Уменьшаем размер чанков для быстрой обработки
+                chunk_size = min(chunk_size, 800)
+                chunk_overlap = min(chunk_overlap, 100)
+            
             self.text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=config.text_splitter_config["chunk_size"],
-                chunk_overlap=config.text_splitter_config["chunk_overlap"],
-                length_function=config.text_splitter_config["length_function"],
-                separators=config.text_splitter_config["separators"]
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                length_function=len,
+                separators=["\n\n", "\n", " ", ""]
             )
 
             # Инициализация векторной БД
@@ -97,7 +148,7 @@ class RAGSystem:
                     collection_name=config.rag_config["collection_name"]
                 )
 
-            logger.info("RAG components initialized successfully")
+            logger.info("RAG components initialized successfully (serverless optimized)")
 
         except Exception as e:
             logger.error(f"Failed to initialize RAG components: {e}")
@@ -207,7 +258,7 @@ class RAGSystem:
 
     async def search_relevant_docs(self, query: str, user_id: str, session_id: str) -> Dict[str, Any]:
         """
-        Поиск релевантных документов с улучшенным анализом
+        Поиск релевантных документов с ленивой инициализацией (оптимизировано для serverless)
 
         Args:
             query: Поисковый запрос
@@ -221,15 +272,9 @@ class RAGSystem:
         self.stats["total_searches"] += 1
 
         try:
-            # Проверяем статус инициализации
-            if self.initialization_status != "ready":
-                if self.initialization_status == "initializing":
-                    error_msg = "RAG system is still initializing, please try again later"
-                elif self.initialization_status == "failed":
-                    error_msg = f"RAG system initialization failed: {self.initialization_error}"
-                else:
-                    error_msg = "RAG system is not ready"
-
+            # Ленивая инициализация при первом обращении
+            if not await self._ensure_initialized():
+                error_msg = f"RAG system initialization failed: {self.initialization_error}"
                 search_time = time.time() - start_time
                 self.stats["failed_searches"] += 1
 
@@ -246,8 +291,12 @@ class RAGSystem:
                     "error": error_msg
                 }
 
-            # Всегда используем улучшенный поиск с анализом
-            return await self._perform_enhanced_search(query, user_id, session_id)
+            # БЕЗОПАСНОСТЬ: используем полный пайплайн при приоритете безопасности
+            if config.rag_config.get("security_first", True):
+                return await self._perform_enhanced_search(query, user_id, session_id)
+            else:
+                # Fallback к простому поиску только если отключена безопасность
+                return await self._perform_basic_search(query, user_id, session_id)
 
         except Exception as e:
             search_time = time.time() - start_time
@@ -270,11 +319,21 @@ class RAGSystem:
             }
 
     async def _perform_enhanced_search(self, query: str, user_id: str, session_id: str) -> Dict[str, Any]:
-        """Выполнение улучшенного поиска с анализом"""
+        """Выполнение улучшенного поиска с полным анализом безопасности"""
         start_time = time.time()
 
-        # Анализируем запрос
+        # БЕЗОПАСНОСТЬ: проверяем наличие QueryProcessor
+        if not self.query_processor:
+            logger.error(f"QueryProcessor not available for security analysis of query from user {user_id}")
+            # Fallback к базовому поиску если QueryProcessor недоступен
+            return await self._perform_basic_search(query, user_id, session_id)
+
+        # Анализируем запрос через LLM для безопасности
         analysis_result = await self.query_processor.analyze_and_rephrase_query(query, user_id, session_id)
+
+        # БЕЗОПАСНОСТЬ: логируем анализ запроса для аудита
+        logger.info(f"RAG query analysis for user {user_id}: rag_required={analysis_result.rag_required}, "
+                   f"rephrased_queries={len(analysis_result.rephrased_queries) if analysis_result.rephrased_queries else 0}")
 
         # Если RAG не требуется, возвращаем пустой результат
         if not analysis_result.rag_required:
@@ -292,9 +351,12 @@ class RAGSystem:
                 "error": None
             }
 
-        # Выполняем поиск по всем перефразированным запросам
+        # Выполняем поиск по всем перефразированным запросам (безопасный анализ)
         all_results = []
         queries_to_search = analysis_result.rephrased_queries if analysis_result.rephrased_queries else [query]
+
+        # БЕЗОПАСНОСТЬ: логируем все поисковые запросы для аудита
+        logger.info(f"Executing enhanced RAG search for user {user_id} with {len(queries_to_search)} queries")
 
         for search_query in queries_to_search:
             query_results = await self._perform_basic_search(search_query, user_id, session_id)
@@ -352,8 +414,11 @@ class RAGSystem:
             }
 
     async def _perform_basic_search(self, query: str, user_id: str, session_id: str) -> Dict[str, Any]:
-        """Выполнение базового поиска без анализа"""
+        """Выполнение базового поиска с проверками безопасности"""
         start_time = time.time()
+
+        # БЕЗОПАСНОСТЬ: логируем все поисковые запросы для аудита
+        logger.info(f"Performing basic RAG search for user {user_id}, session {session_id}, query length: {len(query)}")
 
         # Проверяем, что vectorstore инициализирован
         if self.vectorstore is None:

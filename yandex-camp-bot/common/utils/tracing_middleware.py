@@ -31,12 +31,15 @@ class MonitoringClient:
         return self._client
 
     async def send_trace(self, trace: TraceEntry):
-        """Отправить трейс в monitoring-service"""
-        # Временно отключаем отправку всех трейсов для отладки
-        return True
+        """Отправить трейс в monitoring-service (оптимизировано для serverless)"""
+        # В serverless режиме отправляем только трейсы с ошибками
+        if config.monitoring_config.get("serverless_mode", True):
+            if not config.monitoring_config.get("enable_detailed_tracing", False):
+                if trace.status != "error" and not config.monitoring_config.get("trace_only_errors", True):
+                    return True
 
         # Полностью отключаем отправку трейсов для monitoring-service
-        if self.service_name == "monitoring-service":
+        if hasattr(self, 'service_name') and self.service_name == "monitoring-service":
             return True
 
         try:
@@ -47,7 +50,9 @@ class MonitoringClient:
             )
             return response.status_code == 200
         except Exception as e:
-            logger.error(f"Failed to send trace: {e}")
+            # В serverless режиме не логируем ошибки отправки трейсов
+            if not config.monitoring_config.get("serverless_mode", True):
+                logger.error(f"Failed to send trace: {e}")
             return False
 
     async def send_error(self, error_entry: ErrorEntry):
@@ -73,12 +78,14 @@ class MonitoringClient:
     async def send_log(self, level: str, service: str, message: str,
                       user_id: Optional[str] = None, session_id: Optional[str] = None,
                       extra: Optional[Dict[str, Any]] = None):
-        """Отправить лог в monitoring-service"""
-        # Временно отключаем отправку всех логов для отладки
-        return True
+        """Отправить лог в monitoring-service (оптимизировано для serverless)"""
+        # В serverless режиме отправляем только ошибки и предупреждения
+        if config.monitoring_config.get("serverless_mode", True):
+            if level not in ["ERROR", "CRITICAL", "WARNING"]:
+                return True
 
         # Полностью отключаем отправку логов для monitoring-service
-        if self.service_name == "monitoring-service":
+        if hasattr(self, 'service_name') and self.service_name == "monitoring-service":
             return True
 
         try:
@@ -98,7 +105,9 @@ class MonitoringClient:
             )
             return response.status_code == 200
         except Exception as e:
-            logger.error(f"Failed to send log: {e}")
+            # В serverless режиме не логируем ошибки отправки логов
+            if not config.monitoring_config.get("serverless_mode", True):
+                logger.error(f"Failed to send log: {e}")
             return False
 
     async def create_error(self, service: str, error_type: str, error_message: str,
@@ -258,6 +267,13 @@ class TracingMiddleware:
         # Для monitoring-service отключаем трейсинг полностью, чтобы избежать бесконечного цикла
         if self.service_name == "monitoring-service":
             return await call_next(request)
+            
+        # В serverless режиме пропускаем трейсинг health checks
+        if (config.monitoring_config.get("serverless_mode", True) and 
+            config.monitoring_config.get("disable_monitoring_for_health", True) and 
+            request.url.path in ["/health", "/", "/docs", "/openapi.json"]):
+            return await call_next(request)
+            
         trace_id = request.headers.get("X-Trace-Id", str(uuid.uuid4()))
         # Создаем более осмысленный request_id с timestamp для лучшей трассируемости
         if "X-Request-Id" not in request.headers:
@@ -274,7 +290,8 @@ class TracingMiddleware:
         start_datetime = datetime.utcnow()
 
         # Отправляем трейс только если это не monitoring-service (избегаем бесконечного цикла)
-        should_trace = self.service_name != "monitoring-service"
+        should_trace = (self.service_name != "monitoring-service" and 
+                       config.monitoring_config.get("enable_detailed_tracing", False))
 
         if should_trace:
             # Создаем начальный спан

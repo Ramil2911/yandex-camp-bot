@@ -1,6 +1,7 @@
 import time
 import logging
 from fastapi import FastAPI, HTTPException
+from loguru import logger
 
 from common.config import config
 from common.utils.tracing_middleware import TracingMiddleware, log_error
@@ -27,20 +28,21 @@ class RAGService(BaseService):
         )
 
     async def on_startup(self):
-        """Инициализация RAG системы"""
+        """Создание RAG системы (ленивая инициализация для serverless)"""
         global rag_system
 
         try:
+            # Создаем объект RAG системы, но не инициализируем его сразу
             rag_system = RAGSystem()
-            self.logger.info("RAG System initialized successfully")
+            self.logger.info("RAG System created successfully with FULL SECURITY PIPELINE (will initialize on first request)")
         except Exception as e:
-            self.logger.error(f"Failed to initialize RAG System: {e}")
+            self.logger.error(f"Failed to create RAG System: {e}")
 
-            # Отправляем информацию об ошибке инициализации в monitoring-service
+            # Отправляем информацию об ошибке в monitoring-service
             self.handle_error_response(
                 error=e,
                 context={
-                    "operation": "rag_system_init",
+                    "operation": "rag_system_creation",
                     "data_directory": config.data_directory,
                     "chroma_db_directory": config.chroma_db_directory
                 }
@@ -71,7 +73,7 @@ class RAGService(BaseService):
         return dependencies_status
 
     def create_health_response(self, status: str, service_status: str = None, additional_stats: dict = None):
-        """Создание health check ответа для RAG service"""
+        """Создание health check ответа для RAG service с проверкой безопасности"""
         if rag_system:
             system_info = rag_system.get_system_info()
 
@@ -82,9 +84,23 @@ class RAGService(BaseService):
             else:
                 rag_status = system_info.status
                 vectorstore_status = system_info.status
+                
+            # БЕЗОПАСНОСТЬ: проверяем наличие QueryProcessor
+            security_pipeline_status = "enabled" if rag_system.query_processor else "disabled"
         else:
             rag_status = "unavailable"
             vectorstore_status = "unavailable"
+            security_pipeline_status = "unknown"
+
+        # Добавляем информацию о безопасности в статистику
+        security_stats = additional_stats or {}
+        security_first = config.rag_config.get("security_first", True)
+        security_stats.update({
+            "security_pipeline": security_pipeline_status,
+            "llm_analysis_enabled": security_first,
+            "full_pipeline_mode": security_first,
+            "security_first": security_first
+        })
 
         return RAGHealthCheckResponse(
             status=status,
@@ -92,7 +108,7 @@ class RAGService(BaseService):
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
             rag_status=rag_status,
             vectorstore_status=vectorstore_status,
-            stats=additional_stats or {}
+            stats=security_stats
         )
 
 

@@ -16,45 +16,11 @@ class DialogueBot:
     """Диалоговый бот с поддержкой памяти разговоров"""
 
     def __init__(self):
-        # Инициализация с обработкой ошибок
+        # Ленивая инициализация для serverless
         self.client = None
-        self.llm_status = "unavailable"
-        
-        try:
-            # Проверяем наличие токенов
-            if not config.yc_openai_token:
-                raise ValueError("YC_OPENAI_TOKEN not provided")
-            if not config.yc_folder_id:
-                raise ValueError("YC_FOLDER_ID not provided")
-                
-            # Получаем конфигурацию модели с проверкой
-            model_config = getattr(config, 'model_config', {
-                "model_name": "yandexgpt-lite/latest",
-                "temperature": 0.6,
-                "max_tokens": 2000,
-                "api_base": "https://llm.api.cloud.yandex.net/v1"
-            })
-
-            # Используем правильный формат модели для Yandex Cloud
-            model_name = f"gpt://{config.yc_folder_id}/yandexgpt-lite/latest"
-
-            self.client = ChatOpenAI(
-                openai_api_key=config.yc_openai_token,
-                openai_api_base=model_config.get("api_base", "https://llm.api.cloud.yandex.net/v1"),
-                model_name=model_name,
-                temperature=model_config.get("temperature", 0.6),
-                max_tokens=model_config.get("max_tokens", 2000)
-            )
-            
-            # Тестируем подключение
-            self._test_llm_connection()
-            self.llm_status = "available"
-            logger.info("DialogueBot initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize DialogueBot: {e}")
-            self.llm_status = "unavailable"
-            self.client = None
+        self.llm_status = "not_initialized"
+        self._initialization_lock = asyncio.Lock()
+        self._is_initializing = False
 
         # Redis для хранения истории сессий
         self.redis_available = redis_client.connection_status == "connected"
@@ -81,9 +47,75 @@ class DialogueBot:
         # Инициализация кеша истории для LangChain
         self._history_cache: Dict[str, ChatMessageHistory] = {}
 
-        # Настройка LangChain цепочки только если LLM доступен
+        # В serverless цепочка настроится при первом обращении
+
+    async def _ensure_llm_initialized(self):
+        """Ленивая инициализация LLM при первом обращении"""
         if self.llm_status == "available":
-            self._setup_chain()
+            return True
+            
+        if self.llm_status == "unavailable":
+            return False
+            
+        # Используем lock для предотвращения множественной инициализации
+        async with self._initialization_lock:
+            # Повторная проверка после получения блокировки
+            if self.llm_status == "available":
+                return True
+            if self.llm_status == "unavailable":
+                return False
+                
+            if self._is_initializing:
+                # Ждем завершения инициализации
+                while self._is_initializing:
+                    await asyncio.sleep(0.1)
+                return self.llm_status == "available"
+            
+            self._is_initializing = True
+            
+            try:
+                # Проверяем наличие токенов
+                if not config.yc_openai_token:
+                    raise ValueError("YC_OPENAI_TOKEN not provided")
+                if not config.yc_folder_id:
+                    raise ValueError("YC_FOLDER_ID not provided")
+                    
+                # Получаем конфигурацию модели с проверкой
+                model_config = getattr(config, 'model_config', {
+                    "model_name": "yandexgpt-lite/latest",
+                    "temperature": 0.6,
+                    "max_tokens": 2000,
+                    "api_base": "https://llm.api.cloud.yandex.net/v1"
+                })
+
+                # Используем правильный формат модели для Yandex Cloud
+                model_name = f"gpt://{config.yc_folder_id}/yandexgpt-lite/latest"
+
+                self.client = ChatOpenAI(
+                    openai_api_key=config.yc_openai_token,
+                    openai_api_base=model_config.get("api_base", "https://llm.api.cloud.yandex.net/v1"),
+                    model_name=model_name,
+                    temperature=model_config.get("temperature", 0.6),
+                    max_tokens=model_config.get("max_tokens", 2000)
+                )
+                
+                # В serverless режиме пропускаем тестирование подключения для ускорения
+                # self._test_llm_connection()
+                self.llm_status = "available"
+                
+                # Настраиваем цепочку
+                self._setup_chain()
+                
+                logger.info("DialogueBot LLM initialized successfully (lazy)")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize DialogueBot LLM: {e}")
+                self.llm_status = "unavailable"
+                self.client = None
+                return False
+            finally:
+                self._is_initializing = False
 
     def _test_llm_connection(self):
         """Тестирование подключения к LLM"""
@@ -232,7 +264,7 @@ class DialogueBot:
 
     async def process_message(self, message: str, session_id: str, user_id: str = "unknown", context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Обработка диалогового сообщения
+        Обработка диалогового сообщения (с ленивой инициализацией для serverless)
 
         Args:
             message: Сообщение пользователя
@@ -248,6 +280,22 @@ class DialogueBot:
 
         # Сохраняем user_id для использования в других методах
         self.current_user_id = user_id
+
+        # Ленивая инициализация LLM при первом запросе
+        if not await self._ensure_llm_initialized():
+            processing_time = time.time() - start_time
+            self.stats.failed_requests += 1
+            
+            logger.error(f"LLM not available for session {session_id}")
+            
+            return {
+                "response": "Извините, сервис временно недоступен. Попробуйте позже.",
+                "session_id": session_id,
+                "processing_time": processing_time,
+                "tokens_used": 0,
+                "context_used": False,
+                "error": "LLM initialization failed"
+            }
 
         # Инициализируем сессию с user_id (асинхронно)
         await self._initialize_session(session_id, user_id)

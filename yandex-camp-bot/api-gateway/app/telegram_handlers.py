@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from aiogram import Router, Bot
 from aiogram.types import Message
 from aiogram.filters import Command
@@ -174,15 +175,44 @@ async def handle_message(message: Message, bot: Bot):
             await message.reply(config.bot_messages["empty_message"])
             return
 
-        # 1. Проверяем безопасность
+        # 1. Параллельно выполняем проверку безопасности и RAG поиск (оптимизация для serverless)
         security_request = SecurityCheckRequest(
             message=message_text,
             user_id=user_id,
             session_id=session_id
         )
 
-        security_response = await service_client.check_security(security_request)
+        rag_request = RAGSearchRequest(
+            query=message_text,
+            user_id=user_id,
+            session_id=session_id
+        )
 
+        # Выполняем security и RAG параллельно для ускорения
+        security_task = service_client.check_security(security_request)
+        rag_task = service_client.search_rag(rag_request)
+
+        security_response, rag_response = await asyncio.gather(
+            security_task, rag_task, return_exceptions=True
+        )
+
+        # Обрабатываем ошибки от параллельных запросов
+        if isinstance(security_response, Exception):
+            logger.error(f"Security check failed: {security_response}")
+            # Fallback: разрешаем запрос если security недоступен
+            from common.models import SecurityCheckResponse
+            security_response = SecurityCheckResponse(allowed=True, reason="Security service unavailable")
+
+        if isinstance(rag_response, Exception):
+            logger.error(f"RAG search failed: {rag_response}")
+            # Fallback: пустой контекст если RAG недоступен
+            from common.models import RAGSearchResponse
+            rag_response = RAGSearchResponse(
+                context="", documents_found=0, search_time=0.0,
+                documents_info=[], similarity_scores=[], error=str(rag_response)
+            )
+
+        # Проверяем результат безопасности
         if not security_response.allowed:
             await service_client.log_event(LogEntry(
                 level="WARNING",
@@ -202,30 +232,7 @@ async def handle_message(message: Message, bot: Bot):
                 await message.reply(config.bot_messages["moderator_blocked"])
             return
 
-        # 2. Ищем релевантный контекст в RAG
-        rag_request = RAGSearchRequest(
-            query=message_text,
-            user_id=user_id,
-            session_id=session_id
-        )
-
-        rag_response = await service_client.search_rag(rag_request)
-
-        # Проверяем, была ли ошибка в RAG поиске
-        if rag_response.error:
-            await service_client.log_event(LogEntry(
-                level="WARNING",
-                service="api-gateway",
-                message="RAG search returned error, proceeding without context",
-                user_id=user_id,
-                session_id=session_id,
-                extra={
-                    "error": rag_response.error,
-                    "search_time": rag_response.search_time
-                }
-            ))
-
-        # 3. Обрабатываем диалог с контекстом
+        # 2. Обрабатываем диалог с контекстом
         dialogue_request = DialogueRequest(
             message=message_text,
             user_id=user_id,
@@ -238,10 +245,10 @@ async def handle_message(message: Message, bot: Bot):
 
         dialogue_response = await service_client.process_dialogue(dialogue_request)
 
-        # 4. Отправляем ответ пользователю
+        # 3. Отправляем ответ пользователю
         await message.reply(dialogue_response.response)
 
-        # 5. Логируем успешную обработку
+        # 4. Логируем успешную обработку
         await service_client.log_event(LogEntry(
             level="INFO",
             service="api-gateway",

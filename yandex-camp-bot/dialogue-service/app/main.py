@@ -28,15 +28,15 @@ class DialogueService(BaseService):
         )
 
     async def on_startup(self):
-        """Инициализация диалогового бота"""
+        """Создание диалогового бота (ленивая инициализация для serverless)"""
         global dialogue_bot
 
-        # Инициализация диалогового бота
+        # Создаем объект диалогового бота, но не инициализируем LLM сразу
         try:
             dialogue_bot = DialogueBot()
-            self.logger.info("DialogueBot initialized successfully")
+            self.logger.info("DialogueBot created successfully (will initialize LLM on first request)")
         except Exception as e:
-            self.logger.error(f"Failed to initialize DialogueBot: {e}")
+            self.logger.error(f"Failed to create DialogueBot: {e}")
             dialogue_bot = None
             raise e
 

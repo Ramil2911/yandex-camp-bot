@@ -18,18 +18,29 @@ logger = logging.getLogger(__name__)
 
 
 class ServiceHTTPClient:
-    """HTTP клиент для межсервисного взаимодействия"""
+    """HTTP клиент для межсервисного взаимодействия (оптимизированный для serverless)"""
 
-    def __init__(self, timeout: float = 30.0, retries: int = 3):
+    def __init__(self, timeout: float = 10.0, retries: int = 1):
+        # Сокращенные таймауты для serverless
         self.timeout = timeout
         self.retries = retries
         self._client: Optional[httpx.AsyncClient] = None
 
     @asynccontextmanager
     async def _get_client(self):
-        """Получение HTTP клиента"""
+        """Получение HTTP клиента с connection pooling"""
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
+            # Оптимизированные настройки для serverless
+            limits = httpx.Limits(
+                max_keepalive_connections=10,
+                max_connections=20,
+                keepalive_expiry=30
+            )
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=limits,
+                http2=True  # Включаем HTTP/2 для лучшей производительности
+            )
 
         try:
             yield self._client
@@ -54,9 +65,10 @@ class ServiceHTTPClient:
         headers: Optional[Dict[str, str]] = None,
         retries: Optional[int] = None
     ) -> httpx.Response:
-        """Выполнение HTTP запроса с повторными попытками"""
+        """Выполнение HTTP запроса (упрощенная логика для serverless)"""
 
-        retry_count = retries or self.retries
+        # В serverless retry логика упрощается - только один быстрый повтор
+        retry_count = min(retries or self.retries, 1)
 
         for attempt in range(retry_count + 1):
             try:
@@ -68,23 +80,14 @@ class ServiceHTTPClient:
                         json=json,
                         headers=headers
                     )
-
-                    # Не повторять для клиентских ошибок
-                    if response.status_code < 500:
-                        return response
-
-                    if attempt < retry_count:
-                        wait_time = 2 ** attempt  # Экспоненциальная задержка
-                        logger.warning(f"Request failed (attempt {attempt + 1}), retrying in {wait_time}s...")
-                        await asyncio.sleep(wait_time)
+                    return response
 
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt < retry_count:
-                    wait_time = 2 ** attempt
-                    logger.warning(f"Connection error (attempt {attempt + 1}): {str(e)}, retrying in {wait_time}s...")
-                    await asyncio.sleep(wait_time)
+                    # Минимальная задержка для serverless
+                    await asyncio.sleep(0.1)
                 else:
-                    logger.error(f"Final attempt failed: {str(e)}")
+                    logger.error(f"HTTP request failed: {str(e)}")
                     raise
 
         raise Exception(f"HTTP request failed after {retry_count + 1} attempts")
@@ -250,8 +253,8 @@ class ServiceHTTPClient:
             logger.error(f"Monitoring service error: {e}")
 
 
-# Глобальный экземпляр клиента
-service_http_client = ServiceHTTPClient()
+# Глобальный экземпляр клиента с оптимизациями для serverless
+service_http_client = ServiceHTTPClient(timeout=8.0, retries=0)  # Еще более агрессивные настройки
 
 
 async def health_check_service(service_url: str, service_name: str) -> Dict[str, Any]:

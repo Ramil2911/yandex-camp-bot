@@ -65,7 +65,11 @@ class Config(BaseSettings):
         "similarity_threshold": 0.6,
         "min_documents": 1,
         "max_search_results": 5,
-        "collection_name": "documents"
+        "collection_name": "documents",
+        # Serverless оптимизации
+        "serverless_mode": True,
+        "security_first": True,  # Включает полный пайплайн и анализ для безопасности
+        "cache_embeddings": True
     }
 
     # Embedding Configuration (для RAG service)
@@ -88,6 +92,10 @@ class Config(BaseSettings):
         "max_memory_sessions": 1000,
         "session_timeout_hours": 24,
         "max_context_length": 4000,
+        # Serverless оптимизации
+        "serverless_mode": True,
+        "lazy_init_llm": True,
+        "skip_connection_test": True,
         "system_prompt_template": """Ты полезный AI-ассистент с доступом к базе знаний. Отвечай на русском языке. Старайся отвечать коротко и понятно.
 
 Отвечай в стиле типичного двачера, завсегдатая /b. Детально копируй стиль и тон.
@@ -110,7 +118,12 @@ class Config(BaseSettings):
         "log_retention_days": 30,
         "max_logs_per_request": 1000,
         "enable_metrics": True,
-        "metrics_retention_hours": 24
+        "metrics_retention_hours": 24,
+        # Serverless оптимизации
+        "serverless_mode": True,
+        "enable_detailed_tracing": False,
+        "trace_only_errors": True,
+        "disable_monitoring_for_health": True
     }
 
     # Log levels mapping (для monitoring service)
