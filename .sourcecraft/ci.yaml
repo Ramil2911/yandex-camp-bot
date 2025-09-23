@@ -129,6 +129,7 @@ tasks:
               done
               
               echo \"Regular services deployed successfully!\"
+              curl $API_GATEWAY_URL
             "
 
   - name: deploy-rag-only
