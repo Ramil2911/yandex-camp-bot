@@ -38,8 +38,8 @@ class ServiceHTTPClient:
             )
             self._client = httpx.AsyncClient(
                 timeout=self.timeout,
-                limits=limits,
-                http2=True  # Включаем HTTP/2 для лучшей производительности
+                limits=limits
+                # http2 отключен для совместимости с serverless (требует доп. пакетов)
             )
 
         try:
