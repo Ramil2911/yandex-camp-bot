@@ -47,10 +47,15 @@ class APIGatewayService(BaseService):
 
             self.logger.info("Telegram bot initialized")
 
+            # Логируем выбранный режим работы бота
+            self.logger.info(f"Выбран режим работы бота: {config.bot_mode}")
+
             # Выбираем режим работы бота
             if config.bot_mode.lower() == "webhook":
+                self.logger.info("Инициализация режима webhook для Telegram бота")
                 await self._setup_webhook_mode()
             elif config.bot_mode.lower() == "polling":
+                self.logger.info("Инициализация режима polling для Telegram бота")
                 await self._setup_polling_mode()
             else:
                 self.logger.error(f"Invalid BOT_MODE: {config.bot_mode}. Supported modes: polling, webhook")
